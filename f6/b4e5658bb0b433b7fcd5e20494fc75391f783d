@@ -1,0 +1,27 @@
+msv/__init__.py
+  s_5486aedf35e3d3::t_dbd69576bef2bd 1-23
+tests/test_types.py
+  s_5486aedf35e3d3::t_6a9672e44ec9ef 1-85
+pyproject.toml
+  s_5486aedf35e3d3::t_a7217aefeb92f0 1-23
+tests/conftest.py
+  s_5486aedf35e3d3::t_1b0387ea08dc68 1-108
+msv/types.py
+  s_5486aedf35e3d3::t_03d496f9316315 1-60
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "f6b4e5658bb0b433b7fcd5e20494fc75391f783d",
+  "prompts": {},
+  "sessions": {
+    "s_5486aedf35e3d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9ebfb12-ad66-4f90-bbf7-3f8053904f30",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
