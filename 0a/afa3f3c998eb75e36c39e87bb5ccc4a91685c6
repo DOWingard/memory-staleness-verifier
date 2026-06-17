@@ -1,0 +1,23 @@
+msv/verdict.py
+  s_5486aedf35e3d3::t_c577b43a319da3 17
+  s_5486aedf35e3d3::t_75fe6e66f12a04 36-51
+tests/test_batch_summary.py
+  s_5486aedf35e3d3::t_2e0e6c929e7090 1-9,12,14-15,17-22,24,30-59
+  s_5486aedf35e3d3::t_40c69af5e62251 10-11,13,16,23,25-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "0aafa3f3c998eb75e36c39e87bb5ccc4a91685c6",
+  "prompts": {},
+  "sessions": {
+    "s_5486aedf35e3d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9ebfb12-ad66-4f90-bbf7-3f8053904f30",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
