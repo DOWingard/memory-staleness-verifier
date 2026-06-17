@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Store-agnostic verifier that re-checks the factual currency of code-anchored agent-memory entries against a live Python repository (AST parse only, no execution)."
 readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
 dependencies = []
 
 [project.optional-dependencies]
