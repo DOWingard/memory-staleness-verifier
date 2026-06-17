@@ -1,0 +1,23 @@
+README.md
+  s_5486aedf35e3d3::t_f05e1102d5e3d4 4,6,8-15,17-23,25-32,34-41,47-51,54-123,125-128,130-133,135,142-144,147-152,154-159,169-172,174,187-219,221
+LICENSE
+  s_5486aedf35e3d3::t_ca6bb9226456df 1-21
+pyproject.toml
+  s_5486aedf35e3d3::t_e31e2353ba957c 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "473fe9b1f252f52ad8592b79528be5135939e1f5",
+  "prompts": {},
+  "sessions": {
+    "s_5486aedf35e3d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9ebfb12-ad66-4f90-bbf7-3f8053904f30",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
