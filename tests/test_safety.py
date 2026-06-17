@@ -1,0 +1,68 @@
+"""Chunk 7: safety invariants — never import/execute the target; never write to it.
+
+These exercise the whole pipeline (library + CLI) against repos engineered to
+detonate on import, proving the verifier only ever AST-parses.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from msv.cli import main
+from msv.resolution import resolve_anchor
+from msv.types import Anchor
+from msv.verdict import verify_records
+
+from conftest import snapshot_tree
+
+
+def test_module_top_level_sys_exit_is_safe(tmp_repo: Path, make_record):
+    # pkg/explode.py calls sys.exit(1) at module top level. If the resolver
+    # imported it, this process would terminate. AST parse must be unaffected.
+    rec = make_record("boom", ("pkg/explode.py", "handler"))
+    verdicts, _summary = verify_records(str(tmp_repo), [rec])
+    assert verdicts[0].verdict == "current"
+    assert verdicts[0].anchors[0].found is True
+
+
+def test_resolver_uses_ast_not_import(tmp_repo: Path):
+    # pkg/nameerror.py raises NameError at import time. Resolving its symbol via
+    # AST must still succeed, proving no import path is taken.
+    res = resolve_anchor(str(tmp_repo), Anchor("pkg/nameerror.py", "safe"))
+    assert res.found is True
+    assert res.reason == "ok"
+
+
+def test_repo_mtimes_unchanged_after_run(tmp_repo: Path, tmp_path: Path):
+    before = snapshot_tree(tmp_repo)
+
+    records = [
+        {"id": "a", "claim_text": "x", "anchors": [
+            {"path": "pkg/auth.py", "symbol": "refresh"}]},
+        {"id": "b", "claim_text": "y", "anchors": [
+            {"path": "pkg/broken.py", "symbol": "oops"}]},
+        {"id": "c", "claim_text": "z", "anchors": [
+            {"path": "pkg/explode.py", "symbol": "handler"}]},
+        {"id": "d", "claim_text": "w", "anchors": [
+            {"path": "pkg/missing.py", "symbol": "x"}]},
+    ]
+    records_file = tmp_path / "records.json"
+    records_file.write_text(json.dumps(records), encoding="utf-8")
+    out_file = tmp_path / "out.json"
+
+    main([
+        "--records", str(records_file), "--repo", str(tmp_repo),
+        "--out", str(out_file),
+    ])
+
+    after = snapshot_tree(tmp_repo)
+    assert after == before  # no repo file created, deleted, or modified
+
+
+def test_no_new_files_created_in_repo(tmp_repo: Path):
+    before = set(snapshot_tree(tmp_repo).keys())
+    verify_records(str(tmp_repo), [])
+    resolve_anchor(str(tmp_repo), Anchor("pkg/auth.py", "refresh"))
+    resolve_anchor(str(tmp_repo), Anchor("pkg/broken.py", "x"))
+    after = set(snapshot_tree(tmp_repo).keys())
+    assert after == before  # e.g. no __pycache__ from an accidental import
