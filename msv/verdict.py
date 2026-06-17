@@ -14,6 +14,7 @@ from msv.types import (
     AnchorResult,
     Record,
     RecordVerdict,
+    RunSummary,
     Verdict,
 )
 
@@ -30,6 +31,22 @@ def verify_record(repo_root: str, record: Record) -> RecordVerdict:
     results = tuple(resolve_anchor(repo_root, anchor) for anchor in record.anchors)
     verdict = _classify(results)
     return RecordVerdict(id=record.id, verdict=verdict, anchors=results)
+
+
+def verify_records(
+    repo_root: str, records: list[Record]
+) -> tuple[list[RecordVerdict], RunSummary]:
+    """Verify a batch in input order; return verdicts and aggregate counts.
+
+    len(verdicts) == len(records); the summary buckets sum to len(records).
+    """
+    verdicts = [verify_record(repo_root, record) for record in records]
+    summary = RunSummary(
+        current=sum(1 for v in verdicts if v.verdict == "current"),
+        stale=sum(1 for v in verdicts if v.verdict == "stale"),
+        unverifiable=sum(1 for v in verdicts if v.verdict == "unverifiable"),
+    )
+    return verdicts, summary
 
 
 def _classify(results: tuple[AnchorResult, ...]) -> Verdict:
