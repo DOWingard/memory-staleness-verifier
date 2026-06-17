@@ -1,0 +1,22 @@
+msv/resolution.py
+  s_5486aedf35e3d3::t_b042f588b57549 1-137
+tests/test_resolution.py
+  s_5486aedf35e3d3::t_f1193e4dd3c180 1-53,56-121
+  s_5486aedf35e3d3::t_624dd0ce0b878f 54-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "1c5239106586168a000a7ab09e645fed4c15097b",
+  "prompts": {},
+  "sessions": {
+    "s_5486aedf35e3d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9ebfb12-ad66-4f90-bbf7-3f8053904f30",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
