@@ -1,0 +1,21 @@
+tests/test_serialization.py
+  s_5486aedf35e3d3::t_a374db7e09b53b 1-136
+msv/serialization.py
+  s_5486aedf35e3d3::t_b3f71f010d64fb 1-91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "f49946d033bed01d9e1fac03b9be82aeb4baf24b",
+  "prompts": {},
+  "sessions": {
+    "s_5486aedf35e3d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9ebfb12-ad66-4f90-bbf7-3f8053904f30",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
