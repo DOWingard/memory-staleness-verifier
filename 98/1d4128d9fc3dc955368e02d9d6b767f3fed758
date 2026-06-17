@@ -1,0 +1,21 @@
+msv/env.py
+  s_5486aedf35e3d3::t_69659f162ec0c2 1-17
+tests/test_env.py
+  s_5486aedf35e3d3::t_932fe67439dbe8 1-24
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "981d4128d9fc3dc955368e02d9d6b767f3fed758",
+  "prompts": {},
+  "sessions": {
+    "s_5486aedf35e3d3": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b9ebfb12-ad66-4f90-bbf7-3f8053904f30",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
