@@ -1,0 +1,28 @@
+msv/cli.py
+  s_b259cb4203921c::t_ade638a8eb4e58 44-45
+  s_b259cb4203921c::t_678f3ca518b269 32-34
+pyproject.toml
+  s_b259cb4203921c::t_f8d65b6c0e594e 8
+README.md
+  s_b259cb4203921c::t_c38fc883facbbb 214-265
+  s_b259cb4203921c::t_5c7d4f926aa8f2 361-362
+  s_b259cb4203921c::t_e6d4e58425bb2d 5-6
+  s_b259cb4203921c::t_206fbadf4e6750 32-33
+  s_b259cb4203921c::t_e60da2476f2468 24-27
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "8a090f8269315bc449ea932ea34853496d7ed695",
+  "prompts": {},
+  "sessions": {
+    "s_b259cb4203921c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e917fc03-8ae8-4d26-a2c3-705385d7b808",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
