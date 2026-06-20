@@ -167,35 +167,127 @@ def test_ts_exported_arrow_const_found():
     assert locate("export const Comp = () => {};\n", "a.ts", "Comp").status == "found"
 
 
-# --- TypeScript: Mirror-Python exclusions (=> missing => stale) ---------------
+# --- TypeScript: present-but-not-callable -> indirect (unverifiable) -----------
+# These declarations are not resolvable callables, but the name IS bound, so its
+# presence is not provable absence -> indirect, never stale.
 
 
-def test_ts_data_const_is_missing():
-    assert locate("export const MAX = 5;\n", "a.ts", "MAX").status == "missing"
+def test_ts_data_const_is_indirect():
+    res = locate("export const MAX = 5;\n", "a.ts", "MAX")
+    assert res.status == "indirect"
+    assert res.detail == "noncallable"
 
 
-def test_ts_interface_is_missing():
-    assert locate("export interface User {}\n", "a.ts", "User").status == "missing"
+def test_ts_interface_is_indirect():
+    res = locate("export interface User {}\n", "a.ts", "User")
+    assert res.status == "indirect"
+    assert res.detail == "noncallable"
 
 
-def test_ts_type_alias_is_missing():
-    assert locate("export type Id = string;\n", "a.ts", "Id").status == "missing"
+def test_ts_type_alias_is_indirect():
+    res = locate("export type Id = string;\n", "a.ts", "Id")
+    assert res.status == "indirect"
+    assert res.detail == "noncallable"
 
 
-def test_ts_enum_is_missing():
-    assert locate("export enum Role { A, B }\n", "a.ts", "Role").status == "missing"
+def test_ts_enum_is_indirect():
+    res = locate("export enum Role { A, B }\n", "a.ts", "Role")
+    assert res.status == "indirect"
+    assert res.detail == "noncallable"
+
+
+def test_ts_const_interface_type_enum_are_indirect():
+    # The sanctioned contract change: every value/type-only declaration form is
+    # present-but-indirect rather than missing.
+    for src, name in [
+        ("const MAX = 5;\n", "MAX"),
+        ("interface User {}\n", "User"),
+        ("type Id = string;\n", "Id"),
+        ("enum Role { A, B }\n", "Role"),
+    ]:
+        assert locate(src, "a.ts", name).status == "indirect"
+
+
+# --- TypeScript: re-export / barrel / commonjs / nested -> indirect ------------
+
+
+def test_ts_named_import_is_indirect():
+    res = locate("import { parse } from './core';\n", "a.ts", "parse")
+    assert res.status == "indirect"
+    assert res.detail == "reexport"
+
+
+def test_ts_named_reexport_is_indirect():
+    res = locate("export { parse } from './core';\n", "a.ts", "parse")
+    assert res.status == "indirect"
+    assert res.detail == "reexport"
+
+
+def test_ts_aliased_reexport_is_indirect():
+    # Both the original and the alias are treated as re-exported (conservative).
+    src = "export { orig as parse } from './core';\n"
+    assert locate(src, "a.ts", "parse").status == "indirect"
+    assert locate(src, "a.ts", "orig").status == "indirect"
+
+
+def test_ts_barrel_star_is_indirect():
+    # `export * from` may supply any name, so an absent name is unverifiable.
+    res = locate("export * from './core';\n", "a.ts", "mystery")
+    assert res.status == "indirect"
+    assert res.detail == "wildcard"
+
+
+def test_ts_namespace_reexport_binds_name_is_indirect():
+    res = locate("export * as ns from './core';\n", "a.ts", "ns")
+    assert res.status == "indirect"
+    assert res.detail == "reexport"
+
+
+def test_ts_nested_function_is_indirect():
+    src = "function outer() {\n  function inner() {}\n  return inner;\n}\n"
+    res = locate(src, "a.ts", "inner")
+    assert res.status == "indirect"
+    assert res.detail == "nested"
+
+
+def test_js_commonjs_module_exports_is_indirect():
+    res = locate("module.exports = { foo() {} };\n", "a.js", "foo")
+    assert res.status == "indirect"
+    assert res.detail == "commonjs_dynamic"
+
+
+def test_js_commonjs_exports_member_is_indirect():
+    res = locate("exports.foo = function () {};\n", "a.js", "foo")
+    assert res.status == "indirect"
+    assert res.detail == "commonjs_dynamic"
+
+
+# --- TypeScript: provable absence stays missing (stale); recall guard ----------
 
 
 def test_ts_unknown_name_in_clean_file_is_missing():
     assert locate("function a() {}\n", "a.ts", "b").status == "missing"
 
 
-def test_ts_missing_method_on_existing_class_is_missing():
+def test_ts_missing_method_on_existing_class_no_heritage_is_missing():
     assert locate("class C {\n  m() {}\n}\n", "a.ts", "C.nope").status == "missing"
 
 
 def test_ts_method_on_missing_class_is_missing():
     assert locate("class C {}\n", "a.ts", "Ghost.m").status == "missing"
+
+
+def test_ts_method_maybe_inherited_is_indirect():
+    src = "class Sub extends Base {\n  own() {}\n}\n"
+    res = locate(src, "a.ts", "Sub.shared")
+    assert res.status == "indirect"
+    assert res.detail == "maybe_inherited"
+
+
+def test_ts_method_implements_is_maybe_inherited():
+    # `implements` counts as heritage: declaration-merging/mixins could supply it.
+    src = "class C implements I {\n  m() {}\n}\n"
+    assert locate(src, "a.ts", "C.other").status == "indirect"
 
 
 # --- TypeScript: found-despite-error -----------------------------------------
@@ -283,9 +375,12 @@ def test_dts_export_declare_function_found():
     assert locate("export declare function e(): void;\n", "x.d.ts", "e").status == "found"
 
 
-def test_dts_ambient_typed_const_is_missing():
-    # `declare const X: number` has no function value -> Mirror-Python excludes it.
-    assert locate("declare const X: number;\n", "x.d.ts", "X").status == "missing"
+def test_dts_ambient_typed_const_is_indirect():
+    # `declare const X: number` has no function value, but the name is bound, so
+    # it is present-but-indirect rather than provably absent.
+    res = locate("declare const X: number;\n", "x.d.ts", "X")
+    assert res.status == "indirect"
+    assert res.detail == "noncallable"
 
 
 # --- Unsupported languages ----------------------------------------------------

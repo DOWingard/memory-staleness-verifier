@@ -79,6 +79,14 @@ _TS_FUNCTION_VALUES = frozenset(
 _TS_BINDING_NODES = frozenset({"lexical_declaration", "variable_declaration"})
 _TS_EXPORT = "export_statement"
 _TS_AMBIENT = "ambient_declaration"
+# Value/type-only declarations: present, but never a resolvable callable.
+_TS_TYPE_DECL_NODES = frozenset(
+    {"interface_declaration", "type_alias_declaration", "enum_declaration"}
+)
+# Clause node types whose identifiers bind/re-export a name into the module.
+_TS_IMPORT_NAME_NODES = frozenset(
+    {"import_specifier", "export_specifier", "namespace_import", "namespace_export"}
+)
 
 
 def locate(source: str, path: str, symbol: str | None) -> SymbolLookup:
@@ -264,6 +272,32 @@ def _locate_treesitter(source: str, symbol: str | None, language: str) -> Symbol
     # (the error may have swallowed its declaration) is unverifiable, not missing.
     if node is not None or root.has_error:
         return SymbolLookup(status="parse_error", detail="syntax error")
+    # Clean parse, not a resolvable top-level callable: split absent vs indirect.
+    return _ts_absent_or_indirect(root, symbol)
+
+
+def _ts_absent_or_indirect(root: Node, symbol: str) -> SymbolLookup:
+    if "." in symbol:
+        return _ts_method_absent_or_indirect(root, symbol)
+    detail = _ts_indirect_detail(root, symbol)
+    if detail is not None:
+        return SymbolLookup(status="indirect", detail=detail)
+    return SymbolLookup(status="missing")
+
+
+def _ts_method_absent_or_indirect(root: Node, symbol: str) -> SymbolLookup:
+    """Dotted "Class.method" with the method not in the class body."""
+    class_name, _, _member = symbol.partition(".")
+    class_node = _find_top_level_class(root, class_name)
+    if class_node is not None:
+        # The class is here but the method is not. Any heritage (extends or
+        # implements) means the member could be inherited/merged in -> not provable.
+        if _ts_class_has_heritage(class_node):
+            return SymbolLookup(status="indirect", detail="maybe_inherited")
+        return SymbolLookup(status="missing")
+    detail = _ts_indirect_detail(root, class_name)
+    if detail is not None:
+        return SymbolLookup(status="indirect", detail=detail)
     return SymbolLookup(status="missing")
 
 
@@ -337,3 +371,107 @@ def _find_method(class_node: Node, member: str) -> Node | None:
 def _node_name(node: Node) -> str | None:
     name = node.child_by_field_name("name")
     return name.text.decode("utf-8") if name is not None and name.text is not None else None
+
+
+def _node_text(node: Node) -> str | None:
+    return node.text.decode("utf-8") if node.text is not None else None
+
+
+def _walk_nodes(root: Node) -> Iterator[Node]:
+    """Yield every named node in the tree (root included)."""
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        yield node
+        stack.extend(node.named_children)
+
+
+def _find_top_level_class(root: Node, class_name: str) -> Node | None:
+    for decl in _top_level_decls(root):
+        if decl.type in _TS_CLASS_NODES and _node_name(decl) == class_name:
+            return decl
+    return None
+
+
+def _ts_class_has_heritage(class_node: Node) -> bool:
+    """True iff the class extends and/or implements anything."""
+    return any(child.type == "class_heritage" for child in class_node.named_children)
+
+
+def _ts_indirect_detail(root: Node, name: str) -> str | None:
+    """The mechanism making `name` present-but-not-a-top-level-callable, or None.
+
+    Mirrors the Python rule: None means the name is bound nowhere (provably
+    absent → missing → stale); a non-None detail names an indirection that could
+    supply the name (import/re-export, data/type binding, nested declaration,
+    barrel star export, or a CommonJS dynamic export), making it unverifiable.
+    """
+    imported: set[str] = set()
+    declared: set[str] = set()  # function/class declarations at any depth
+    value_bound: set[str] = set()  # const/let/var, interface, type, enum
+    has_barrel = False
+    has_commonjs = False
+    for node in _walk_nodes(root):
+        node_type = node.type
+        if node_type in _TS_IMPORT_NAME_NODES:
+            for ident in node.named_children:
+                if ident.type == "identifier":
+                    imported.add(_node_text(ident) or "")
+        elif node_type == "import_clause":
+            # A default import binds a bare identifier directly under the clause.
+            for child in node.named_children:
+                if child.type == "identifier":
+                    imported.add(_node_text(child) or "")
+        elif node_type == _TS_EXPORT and _is_barrel_export(node):
+            has_barrel = True
+        elif node_type in _TS_FUNCTION_NODES or node_type in _TS_CLASS_NODES:
+            name_text = _node_name(node)
+            if name_text is not None:
+                declared.add(name_text)
+        elif node_type == "variable_declarator" or node_type in _TS_TYPE_DECL_NODES:
+            name_text = _node_name(node)
+            if name_text is not None:
+                value_bound.add(name_text)
+        elif node_type == "assignment_expression" and _is_commonjs_export(node):
+            has_commonjs = True
+
+    if name in imported:
+        return "reexport"
+    # A top-level callable was ruled out before this call, so a declared hit is
+    # necessarily a nested/conditional definition.
+    if name in declared:
+        return "nested"
+    if name in value_bound:
+        return "noncallable"
+    if has_barrel:
+        return "wildcard"
+    if has_commonjs:
+        return "commonjs_dynamic"
+    return None
+
+
+def _is_barrel_export(node: Node) -> bool:
+    """True for `export * from '...'` — a re-export that may supply any name."""
+    children = node.named_children
+    if not any(child.type == "string" for child in children):
+        return False  # no source module to re-export from
+    if any(child.type in ("export_clause", "namespace_export") for child in children):
+        return False  # named (or namespaced) re-export, not a blanket star
+    return node.child_by_field_name("declaration") is None
+
+
+def _is_commonjs_export(node: Node) -> bool:
+    """True for `module.exports = ...` or `exports.x = ...` assignment targets."""
+    left = node.child_by_field_name("left")
+    if left is None or left.type != "member_expression":
+        return False
+    obj = left.child_by_field_name("object")
+    if obj is None:
+        return False
+    obj_text = _node_text(obj)
+    if obj_text == "exports":
+        return True
+    if obj_text == "module":
+        prop = left.child_by_field_name("property")
+        return prop is not None and _node_text(prop) == "exports"
+    return False

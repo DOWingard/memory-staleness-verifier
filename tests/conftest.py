@@ -92,12 +92,12 @@ _TS_REPO_FILES: dict[str, str] = {
         "  async logout(): Promise<void> {}\n"  # 14
         "}\n"
         "\n"
-        "export const MAX_AGE = 3600;\n"  # 17  (data const -> excluded)
-        "export interface User {\n"  # 18  (interface -> excluded)
+        "export const MAX_AGE = 3600;\n"  # 17  (data const -> indirect)
+        "export interface User {\n"  # 18  (interface -> indirect)
         "  id: string;\n"
         "}\n"
-        "export type Id = string;\n"  # 21  (type alias -> excluded)
-        "export enum Role {\n"  # 22  (enum -> excluded)
+        "export type Id = string;\n"  # 21  (type alias -> indirect)
+        "export enum Role {\n"  # 22  (enum -> indirect)
         "  Admin,\n"
         "  Guest,\n"
         "}\n"

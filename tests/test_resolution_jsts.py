@@ -8,7 +8,7 @@ from msv.types import (
     REASON_NO_SYMBOL_REQUESTED,
     REASON_OK,
     REASON_PARSE_ERROR,
-    REASON_SYMBOL_MISSING,
+    REASON_SYMBOL_INDIRECT,
     REASON_UNSUPPORTED_LANGUAGE,
     Anchor,
 )
@@ -52,28 +52,36 @@ def test_ts_symbol_none_is_file_presence(tmp_ts_repo: Path):
     assert res.location == "src/auth.ts:1"
 
 
-def test_ts_data_const_is_symbol_missing(tmp_ts_repo: Path):
+def test_ts_data_const_is_symbol_indirect(tmp_ts_repo: Path):
+    # A value-only const is present-but-indirect -> unverifiable, never stale.
     res = resolve_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "MAX_AGE"))
     assert res.found is False
-    assert res.reason.startswith(REASON_SYMBOL_MISSING)
+    assert res.reason.startswith(REASON_SYMBOL_INDIRECT)
 
 
-def test_ts_interface_is_symbol_missing(tmp_ts_repo: Path):
+def test_ts_interface_is_symbol_indirect(tmp_ts_repo: Path):
     res = resolve_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "User"))
     assert res.found is False
-    assert res.reason.startswith(REASON_SYMBOL_MISSING)
+    assert res.reason.startswith(REASON_SYMBOL_INDIRECT)
 
 
-def test_ts_type_alias_is_symbol_missing(tmp_ts_repo: Path):
+def test_ts_type_alias_is_symbol_indirect(tmp_ts_repo: Path):
     res = resolve_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "Id"))
     assert res.found is False
-    assert res.reason.startswith(REASON_SYMBOL_MISSING)
+    assert res.reason.startswith(REASON_SYMBOL_INDIRECT)
 
 
-def test_ts_enum_is_symbol_missing(tmp_ts_repo: Path):
+def test_ts_enum_is_symbol_indirect(tmp_ts_repo: Path):
     res = resolve_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "Role"))
     assert res.found is False
-    assert res.reason.startswith(REASON_SYMBOL_MISSING)
+    assert res.reason.startswith(REASON_SYMBOL_INDIRECT)
+
+
+def test_ts_truly_absent_symbol_is_missing(tmp_ts_repo: Path):
+    # Guard: a name bound nowhere in a clean TS file stays missing (stale).
+    res = resolve_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "deletedFn"))
+    assert res.found is False
+    assert res.reason.startswith("symbol_missing")
 
 
 def test_tsx_arrow_component_found(tmp_ts_repo: Path):

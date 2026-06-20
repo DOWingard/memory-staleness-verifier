@@ -117,10 +117,16 @@ def test_verify_ts_record_all_found_is_current(tmp_ts_repo: Path, make_record):
     assert verify_record(str(tmp_ts_repo), rec).verdict == "current"
 
 
-def test_verify_ts_missing_symbol_is_stale(tmp_ts_repo: Path, make_record):
-    # An interface is not in the resolvable set: the name is absent -> stale.
-    rec = make_record("t2", ("src/auth.ts", "User"))
+def test_verify_ts_truly_absent_symbol_is_stale(tmp_ts_repo: Path, make_record):
+    # A name bound nowhere in a clean TS file is provably absent -> stale.
+    rec = make_record("t2", ("src/auth.ts", "deletedFn"))
     assert verify_record(str(tmp_ts_repo), rec).verdict == "stale"
+
+
+def test_verify_ts_interface_is_unverifiable(tmp_ts_repo: Path, make_record):
+    # A type-only declaration is present-but-indirect -> unverifiable, not stale.
+    rec = make_record("t2b", ("src/auth.ts", "User"))
+    assert verify_record(str(tmp_ts_repo), rec).verdict == "unverifiable"
 
 
 def test_verify_ts_found_despite_error_is_current(tmp_ts_repo: Path, make_record):
@@ -143,8 +149,8 @@ def test_verify_unsupported_dominates_stale(tmp_ts_repo: Path, make_record):
     # alongside a stale (missing-symbol) anchor.
     rec = make_record(
         "t6",
-        ("src/auth.ts", "User"),     # stale-signal (missing)
-        ("src/data.json", None),     # unverifiable-signal (unsupported)
+        ("src/auth.ts", "deletedFn"),  # stale-signal (provably absent)
+        ("src/data.json", None),       # unverifiable-signal (unsupported)
     )
     assert verify_record(str(tmp_ts_repo), rec).verdict == "unverifiable"
 
