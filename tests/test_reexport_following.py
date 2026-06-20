@@ -10,9 +10,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from msv.resolution import resolve_anchor
+from msv.resolution import fingerprint_anchor, resolve_anchor
 from msv.types import (
+    REASON_FINGERPRINT_VERSION_MISMATCH,
     REASON_OK,
+    REASON_SIGNATURE_CHANGED,
     REASON_SYMBOL_INDIRECT,
     REASON_SYMBOL_MISSING,
     Anchor,
@@ -185,3 +187,102 @@ def test_follow_ts_bare_specifier_stays_indirect(make_repo):
     res = resolve_anchor(repo, Anchor("src/index.ts", "useState"))
     assert res.found is False
     assert res.reason.startswith(REASON_SYMBOL_INDIRECT)
+
+
+# --- Layer B over the hop: capture/verify symmetry ----------------------------
+# The capture seam follows the same edge as verify, so the baseline always
+# describes the SOURCE declaration — capture and verify can never disagree on
+# which shape is being compared.
+
+_API = "from .core import parse\n"
+
+
+def _pkg(core_body: str) -> dict[str, str]:
+    return {"pkg/__init__.py": "", "pkg/api.py": _API, "pkg/core.py": core_body}
+
+
+def test_fingerprint_anchor_follows_to_source(make_repo):
+    # Capturing a re-export mints the source declaration's token — identical to
+    # capturing that source directly, not None and not the importer's shape.
+    repo = make_repo(_pkg("def parse(a, b):\n    return (a, b)\n"))
+    via_reexport = fingerprint_anchor(repo, Anchor("pkg/api.py", "parse"))
+    direct = fingerprint_anchor(repo, Anchor("pkg/core.py", "parse"))
+    assert via_reexport is not None
+    assert via_reexport.startswith("msv-fp/1:")
+    assert via_reexport == direct
+
+
+def test_follow_then_unchanged_is_current(make_repo):
+    repo = make_repo(_pkg("def parse(a, b):\n    return (a, b)\n"))
+    fp = fingerprint_anchor(repo, Anchor("pkg/api.py", "parse"))
+    res = resolve_anchor(repo, Anchor("pkg/api.py", "parse", fp))
+    assert res.found is True
+    assert res.reason == REASON_OK
+    assert res.location == "pkg/core.py:1"
+
+
+def test_follow_then_source_signature_drift_is_stale(make_repo, tmp_path: Path):
+    # Baseline minted over the hop; the SOURCE then drops a required parameter.
+    repo = make_repo(_pkg("def parse(a, b):\n    return (a, b)\n"))
+    fp = fingerprint_anchor(repo, Anchor("pkg/api.py", "parse"))
+    (Path(repo) / "pkg/core.py").write_text(
+        "def parse(a):\n    return a\n", encoding="utf-8"
+    )
+    res = resolve_anchor(repo, Anchor("pkg/api.py", "parse", fp))
+    assert res.found is True  # symbol still resolves; only its shape drifted
+    assert res.location == "pkg/core.py:1"
+    assert res.reason.startswith(REASON_SIGNATURE_CHANGED)
+
+
+def test_follow_then_additive_source_change_is_current(make_repo):
+    # An added optional parameter at the source breaks no previously-valid call.
+    repo = make_repo(_pkg("def parse(a, b):\n    return (a, b)\n"))
+    fp = fingerprint_anchor(repo, Anchor("pkg/api.py", "parse"))
+    (Path(repo) / "pkg/core.py").write_text(
+        "def parse(a, b, c=1):\n    return (a, b, c)\n", encoding="utf-8"
+    )
+    res = resolve_anchor(repo, Anchor("pkg/api.py", "parse", fp))
+    assert res.found is True
+    assert res.reason == REASON_OK
+
+
+def test_reexport_removed_after_capture_is_stale(make_repo):
+    # The importer drops the re-export line: the name is now missing at the
+    # importer itself (no edge to follow), which is provable absence -> stale.
+    repo = make_repo(_pkg("def parse(a, b):\n    return (a, b)\n"))
+    fp = fingerprint_anchor(repo, Anchor("pkg/api.py", "parse"))
+    (Path(repo) / "pkg/api.py").write_text("x = 1\n", encoding="utf-8")
+    res = resolve_anchor(repo, Anchor("pkg/api.py", "parse", fp))
+    assert res.found is False
+    assert res.reason.startswith(REASON_SYMBOL_MISSING)
+    assert "(via" not in res.reason  # missing at the importer, not at a source
+
+
+def test_follow_then_source_overloaded_is_unverifiable(make_repo):
+    # The source becomes overloaded after capture: an ambiguous shape has no
+    # single interface to compare, so it is unverifiable, never stale.
+    repo = make_repo(_pkg("def parse(a, b):\n    return (a, b)\n"))
+    fp = fingerprint_anchor(repo, Anchor("pkg/api.py", "parse"))
+    (Path(repo) / "pkg/core.py").write_text(
+        "def parse(a):\n    return a\n\n\ndef parse(a, b):\n    return (a, b)\n",
+        encoding="utf-8",
+    )
+    res = resolve_anchor(repo, Anchor("pkg/api.py", "parse", fp))
+    assert res.found is True
+    assert res.reason.startswith(REASON_FINGERPRINT_VERSION_MISMATCH)
+
+
+def test_follow_ts_source_signature_drift_is_stale(make_repo):
+    repo = make_repo({
+        "src/index.ts": "export { Button } from './Button';\n",
+        "src/Button.tsx": "export function Button(label: string) {\n  return label;\n}\n",
+    })
+    fp = fingerprint_anchor(repo, Anchor("src/index.ts", "Button"))
+    assert fp is not None
+    (Path(repo) / "src/Button.tsx").write_text(
+        "export function Button(label: string, theme: string) {\n  return label;\n}\n",
+        encoding="utf-8",
+    )
+    res = resolve_anchor(repo, Anchor("src/index.ts", "Button", fp))
+    assert res.found is True
+    assert res.reason.startswith(REASON_SIGNATURE_CHANGED)

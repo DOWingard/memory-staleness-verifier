@@ -273,6 +273,9 @@ def fingerprint_anchor(repo_root: str, anchor: Anchor) -> str | None:
     except (OSError, UnicodeDecodeError):
         return None
     lookup = symbols.locate(source, anchor.path, anchor.symbol)
+    # Follow the same hop verify does, so the baseline describes the SOURCE
+    # declaration and capture/verify can never disagree on the compared shape.
+    lookup, _source_path = _follow_reexport(repo_root, anchor.path, lookup)
     if lookup.status == "found" and lookup.interface is not None:
         return fingerprint.render(lookup.interface)
     return None
