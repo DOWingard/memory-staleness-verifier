@@ -70,14 +70,16 @@ print(summary.current, summary.stale, summary.unverifiable)
   it resolves as a callable and (when a fingerprint is recorded) its call shape
   is unchanged or only additively changed.
 - `stale` — at least one anchor is provably broken: its file or symbol is gone
-  (the name is bound nowhere in a cleanly-parsed file), or a recorded interface
+  (the name is bound nowhere in a cleanly-parsed file, including a symbol deleted
+  at the source of a re-export `msv` follows), or a recorded interface
   fingerprint shows the symbol's call shape changed in a call-breaking way.
 - `unverifiable` — nothing is provably broken, but at least one anchor cannot be
   decided: the record has no anchors, an anchor path is outside the repo, a file
   cannot be parsed or its language is unsupported, the symbol is present only
-  indirectly (a re-export, a wildcard/barrel, a data/type declaration, or a
-  nested or possibly-inherited definition), or a recorded fingerprint cannot be
-  compared (a future version, or an overloaded symbol).
+  indirectly (a re-export `msv` cannot follow — a wildcard/barrel, a bare or
+  absolute specifier, or a further hop — a data/type declaration, or a nested or
+  possibly-inherited definition), or a recorded fingerprint cannot be compared
+  (a future version, or an overloaded symbol).
 
 Precedence (one source of truth): `unverifiable` > `stale` > `current`.
 
@@ -109,9 +111,46 @@ For JavaScript/TypeScript a syntax error in one part of a file does not hide
 cleanly-parsed declarations elsewhere; a name that cannot be cleanly located in a
 file that fails to parse is reported `unverifiable`, never missing, so a syntax
 error never reads as a deletion. Resolution is structural, not semantic: it
-confirms a declaration with that name still exists. It does not follow
-re-exports, path aliases, or barrel files — an anchor reachable only through one
-is reported `symbol_indirect` (`unverifiable`), never stale.
+confirms a declaration with that name still exists. A symbol that arrives through
+a single named, relative re-export is followed one hop to its source (see
+[One-hop re-export following](#one-hop-re-export-following)); every other
+indirection is reported `symbol_indirect` (`unverifiable`), never stale.
+
+## One-hop re-export following
+
+A barrel or re-export module exposes a name that is really declared elsewhere —
+`from .core import parse`, `export { Button } from './Button'`. By existence
+alone the name is only present *indirectly*, so such an anchor would be
+`unverifiable`. `msv` follows exactly **one** named, relative re-export/import
+edge to the source file and resolves the original declaration there, turning a
+class of `unverifiable` results into precise `current` / `stale`:
+
+- the re-export still resolves to a declaration at its source → `current`;
+- the symbol has been **deleted at its source** (bound nowhere in the resolved
+  target, and not a submodule of the package) → `stale` (`symbol_missing`, with
+  the resolved source named as `… (via pkg/core.py)`);
+- the symbol's **source call shape drifts** in a call-breaking way, when a
+  fingerprint was recorded → `stale` (`signature_changed`).
+
+When a re-export is followed, `location` points at the **source** declaration
+(e.g. `pkg/core.py:42`), not the re-exporting file. The fingerprint baseline is
+minted through the same hop, so capture and verify always describe the same
+declaration.
+
+Following is **relative and named only**, one hop, and stays inside the repo;
+every uncertainty keeps the original `unverifiable`, so the zero-false-`stale`
+guarantee is unchanged. A new `stale` arises only from a clean landing on a
+single in-repo target. The following are **not** followed and remain
+`symbol_indirect` (`unverifiable`):
+
+- wildcard / star re-exports (`from .x import *`, `export * from './x'`) — the
+  source module is ambiguous;
+- bare or absolute specifiers (`from pkg.core import x`, `import x from 'lib'`),
+  and TypeScript `paths` / package `exports` aliases — these need module-search
+  configuration `msv` does not read;
+- two or more hops — if the source is itself a re-export, following stops;
+- higher-order wrappers (`memo(X)`, `forwardRef(X)`, `styled.button`) — a
+  same-file value expression, not a cross-file edge.
 
 ## Interface fingerprints (call-shape drift)
 
@@ -207,10 +246,11 @@ and the symbol resolves, the recorded call shape is compared (see
 ```python
 fingerprint_anchor(repo_root: str, anchor: Anchor) -> str | None
 ```
-The capture seam. Resolves the anchor read-only and returns an opaque call-shape
-token when the symbol resolves to a single callable, else `None` (no symbol; the
-symbol is absent, indirect, or overloaded; the file is missing, unparseable, or
-unsupported; or the path escapes the repo). A total function — never raises. Call
+The capture seam. Resolves the anchor read-only — following one re-export hop to
+its source if needed — and returns an opaque call-shape token when the symbol
+resolves to a single callable, else `None` (no symbol; the symbol is absent,
+indirect, or overloaded; the file is missing, unparseable, or unsupported; or the
+path escapes the repo). A total function — never raises. Call
 it **synchronously at capture**, against the working tree the agent saw; see
 [Interface fingerprints](#interface-fingerprints-call-shape-drift).
 
@@ -243,7 +283,8 @@ AnchorResult(path: str, symbol: str | None, found: bool,
 ```
 `location` is e.g. `"pkg/auth.py:42"` when found, else `None` — but it stays
 populated for `signature_changed`, where the symbol exists and only its shape
-drifted. `reason` is a machine-stable code, optionally with a `: <detail>`
+drifted, and points at the **source** file when a re-export was followed.
+`reason` is a machine-stable code, optionally with a `: <detail>`
 suffix — one of: `ok`, `no_symbol_requested`, `file_missing`, `symbol_missing`,
 `symbol_indirect`, `signature_changed`, `fingerprint_version_mismatch`,
 `path_outside_repo`, `parse_error`, `unsupported_language`.
