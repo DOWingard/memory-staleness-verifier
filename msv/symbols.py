@@ -26,6 +26,7 @@ import tree_sitter_javascript as _ts_javascript
 import tree_sitter_typescript as _ts_typescript
 from tree_sitter import Language, Node, Parser
 
+from msv import schema
 from msv.fingerprint import Interface
 
 LookupStatus = Literal["found", "missing", "indirect", "parse_error", "unsupported"]
@@ -74,6 +75,14 @@ _LANGUAGE_BY_EXT: dict[str, str] = {
     ".cts": "typescript",
     ".tsx": "tsx",
 }
+
+# Schema-source suffixes, checked BEFORE the language map so a declared database
+# schema is resolved as data by msv.schema. A bare `.json` is intentionally absent
+# (it stays unsupported); only the explicit `*.schema.json` suffix routes here.
+_SCHEMA_SUFFIXES: tuple[tuple[str, str], ...] = (
+    (".schema.json", schema.JSON_SCHEMA),
+    (".sql", schema.SQL),
+)
 
 # tree-sitter Language objects and reusable parsers, built once per grammar.
 _TS_LANGUAGES: dict[str, Language] = {
@@ -125,15 +134,44 @@ def locate(source: str, path: str, symbol: str | None) -> SymbolLookup:
     A bare symbol resolves to a top-level function or class, or a const/let/var
     bound to a function/arrow. A dotted "Class.method" resolves to a method in
     that top-level class's body. When `symbol` is None the result reports only
-    that the file is present and parses. An unknown extension yields status
+    that the file is present and parses. A `.sql` or `*.schema.json` path resolves
+    against a declared database schema. An unknown extension yields status
     "unsupported"; a file that will not parse yields "parse_error".
     """
+    kind = _schema_kind_for_path(path)
+    if kind is not None:
+        return _locate_schema(source, kind, symbol)
     language = _language_for_path(path)
     if language is None:
         return SymbolLookup(status="unsupported")
     if language == _PYTHON:
         return _locate_python(source, path, symbol)
     return _locate_treesitter(source, path, symbol, language)
+
+
+def _schema_kind_for_path(path: str) -> str | None:
+    """The schema source kind for `path`, or None if it is not a schema source."""
+    low = path.lower()
+    for suffix, kind in _SCHEMA_SUFFIXES:
+        if low.endswith(suffix):
+            return kind
+    return None
+
+
+def _locate_schema(source: str, kind: str, symbol: str | None) -> SymbolLookup:
+    """Map a schema.SchemaResolution onto SymbolLookup.
+
+    `interface` is always None: schema anchors carry no Layer-B fingerprint in v1,
+    so a fingerprint hand-set on a schema anchor degrades to unverifiable (never
+    stale) through the existing `interface is None` branch.
+    """
+    resolution = schema.resolve_symbol(source, kind, symbol)
+    return SymbolLookup(
+        status=resolution.status,
+        lineno=resolution.lineno,
+        detail=resolution.detail,
+        interface=None,
+    )
 
 
 def _language_for_path(path: str) -> str | None:
