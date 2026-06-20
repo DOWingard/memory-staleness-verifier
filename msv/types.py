@@ -21,6 +21,8 @@ REASON_PARSE_ERROR = "parse_error"
 REASON_SYMBOL_MISSING = "symbol_missing"
 REASON_NO_SYMBOL_REQUESTED = "no_symbol_requested"
 REASON_NO_ANCHORS = "no_anchors"
+# Anchor points at a file whose language the resolver cannot parse.
+REASON_UNSUPPORTED_LANGUAGE = "unsupported_language"
 
 
 @dataclass(frozen=True, slots=True)
