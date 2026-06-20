@@ -87,6 +87,29 @@ def test_follow_reexport_is_read_only(make_repo):
     assert snapshot_tree(Path(repo)) == before
 
 
+def test_schema_sources_never_written_or_executed(make_repo, tmp_path: Path):
+    # A .sql containing COPY ... FROM PROGRAM is AST-parsed, never run: if msv
+    # executed it the sentinel would appear. Schema files are read as data only.
+    sentinel = tmp_path / "msv_executed_sentinel"
+    repo = make_repo({
+        "db/schema.sql": (
+            "CREATE TABLE t (id int);\n"
+            f"COPY t FROM PROGRAM 'touch {sentinel}';\n"
+        ),
+        "db/doc.schema.json": '{"properties": {"email": {}}, "additionalProperties": false}\n',
+    })
+    before = snapshot_tree(Path(repo))
+    for anchor in [
+        Anchor("db/schema.sql", "t"),
+        Anchor("db/schema.sql", "t.id"),
+        Anchor("db/schema.sql", "t.gone"),
+        Anchor("db/doc.schema.json", "doc.email"),
+    ]:
+        resolve_anchor(repo, anchor)
+    assert not sentinel.exists()  # COPY ... FROM PROGRAM parsed, never executed
+    assert snapshot_tree(Path(repo)) == before  # no schema file created or modified
+
+
 def test_ts_resolution_is_read_only(tmp_ts_repo: Path):
     # tree-sitter parses source as data; resolving JS/TS must not create,
     # delete, or modify any file in the target repo.

@@ -213,3 +213,55 @@ def test_verify_unsupported_dominates_stale(tmp_ts_repo: Path, make_record):
 def test_verify_mixed_python_and_ts_record_is_current(tmp_ts_repo: Path, make_record):
     rec = make_record("t7", ("src/auth.ts", "refresh"), ("src/legacy.py", "old"))
     assert verify_record(str(tmp_ts_repo), rec).verdict == "current"
+
+
+# --- schema verdicts ----------------------------------------------------------
+
+
+def test_verify_schema_table_and_column_is_current(tmp_schema_repo: Path, make_record):
+    rec = make_record(
+        "s1", ("db/schema.sql", "users"), ("db/schema.sql", "users.email")
+    )
+    assert verify_record(str(tmp_schema_repo), rec).verdict == "current"
+
+
+def test_verify_schema_absent_column_is_stale(tmp_schema_repo: Path, make_record):
+    # A column absent from a closed, fully-parsed table is provably gone -> stale.
+    rec = make_record("s2", ("db/schema.sql", "users.phone"))
+    assert verify_record(str(tmp_schema_repo), rec).verdict == "stale"
+
+
+def test_verify_schema_open_view_member_is_unverifiable(tmp_schema_repo: Path, make_record):
+    # A SELECT * view's member is never provably absent -> unverifiable, not stale.
+    rec = make_record("s3", ("db/schema.sql", "active_users.anything"))
+    assert verify_record(str(tmp_schema_repo), rec).verdict == "unverifiable"
+
+
+def test_verify_schema_indirect_dominates_stale(tmp_schema_repo: Path, make_record):
+    # An open-view member (unverifiable) alongside a missing-file anchor (stale):
+    # precedence makes the record unverifiable.
+    rec = make_record(
+        "s4",
+        ("db/schema.sql", "active_users.anything"),  # unverifiable-signal
+        ("db/gone.sql", "ghost"),                    # stale-signal (file missing)
+    )
+    assert verify_record(str(tmp_schema_repo), rec).verdict == "unverifiable"
+
+
+def test_verify_schema_malformed_is_unverifiable(tmp_schema_repo: Path, make_record):
+    rec = make_record("s5", ("db/broken.sql", "users"))
+    assert verify_record(str(tmp_schema_repo), rec).verdict == "unverifiable"
+
+
+def test_verify_json_absent_field_is_stale(tmp_schema_repo: Path, make_record):
+    rec = make_record("s6", ("db/users.schema.json", "users.phone"))
+    assert verify_record(str(tmp_schema_repo), rec).verdict == "stale"
+
+
+def test_verify_schema_fingerprint_set_is_unverifiable_never_stale(
+    tmp_schema_repo: Path, make_record
+):
+    # A fingerprint hand-set on a present schema member must never make it stale.
+    token = "msv-fp/1:func(req=0,max=0,star=0,kw=0,kwo=0,gen=0,dec=,base=0)"
+    rec = make_record("s7", ("db/schema.sql", "users.email", token))
+    assert verify_record(str(tmp_schema_repo), rec).verdict == "unverifiable"

@@ -154,6 +154,40 @@ def tmp_ts_repo(tmp_path: Path) -> Path:
     return root
 
 
+# A repo of declared-schema sources: a consolidated SQL DDL file exercising a
+# table, a SELECT * view, and an ALTER-added column; a closed Mongo $jsonSchema
+# document; and a malformed .sql. Line numbers are asserted, so keep them in sync.
+_SCHEMA_REPO_FILES: dict[str, str] = {
+    "db/schema.sql": (
+        "CREATE TABLE users (\n"  # 1
+        "  id integer PRIMARY KEY,\n"  # 2
+        "  email text NOT NULL\n"  # 3
+        ");\n"  # 4
+        "\n"  # 5
+        "CREATE VIEW active_users AS SELECT * FROM users;\n"  # 6
+        "\n"  # 7
+        "ALTER TABLE users ADD COLUMN created_at timestamptz;\n"  # 8
+    ),
+    "db/users.schema.json": (
+        '{"$jsonSchema": {"bsonType": "object",\n'
+        '  "properties": {"_id": {}, "email": {}},\n'
+        '  "additionalProperties": false}}\n'
+    ),
+    "db/broken.sql": "CREATE TABLE (\n",  # malformed -> ParseError -> parse_error
+}
+
+
+@pytest.fixture
+def tmp_schema_repo(tmp_path: Path) -> Path:
+    """Materialize the declared-schema sample repo; return the repo root Path."""
+    root = tmp_path / "schema_repo"
+    for rel, text in _SCHEMA_REPO_FILES.items():
+        dest = root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+    return root
+
+
 @pytest.fixture
 def make_repo(tmp_path: Path):
     """Return a builder: make_repo({rel_path: text, ...}) -> repo root str.
