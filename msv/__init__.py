@@ -6,7 +6,7 @@ script or via `from msv.cli import main`.
 """
 from __future__ import annotations
 
-from msv.resolution import resolve_anchor
+from msv.resolution import fingerprint_anchor, resolve_anchor
 from msv.types import (
     Anchor,
     AnchorResult,
@@ -24,6 +24,7 @@ __all__ = [
     "RecordVerdict",
     "RunSummary",
     "Verdict",
+    "fingerprint_anchor",
     "resolve_anchor",
     "verify_record",
     "verify_records",

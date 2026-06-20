@@ -16,13 +16,15 @@ def _write_records(tmp_path: Path, records: list[dict]) -> Path:
 
 
 def test_public_api_importable():
-    # The two surfaces plus the deep resolver and the data types are re-exported.
+    # The two surfaces plus the deep resolver, the capture seam, and the data
+    # types are re-exported.
     from msv import (  # noqa: F401
         Anchor,
         AnchorResult,
         Record,
         RecordVerdict,
         RunSummary,
+        fingerprint_anchor,
         resolve_anchor,
         verify_record,
         verify_records,

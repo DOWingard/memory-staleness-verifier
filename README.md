@@ -66,13 +66,25 @@ print(summary.current, summary.stale, summary.unverifiable)
 
 ## Verdicts
 
-- `current` — every anchor resolves (the file exists and, if a symbol is given,
-  the symbol resolves).
-- `stale` — at least one anchor's file or symbol is missing.
-- `unverifiable` — the record has no anchors, an anchor path is outside the repo,
-  a file cannot be parsed, or the file's language is unsupported.
+- `current` — every anchor resolves: the file exists and, if a symbol is given,
+  it resolves as a callable and (when a fingerprint is recorded) its call shape
+  is unchanged or only additively changed.
+- `stale` — at least one anchor is provably broken: its file or symbol is gone
+  (the name is bound nowhere in a cleanly-parsed file), or a recorded interface
+  fingerprint shows the symbol's call shape changed in a call-breaking way.
+- `unverifiable` — nothing is provably broken, but at least one anchor cannot be
+  decided: the record has no anchors, an anchor path is outside the repo, a file
+  cannot be parsed or its language is unsupported, the symbol is present only
+  indirectly (a re-export, a wildcard/barrel, a data/type declaration, or a
+  nested or possibly-inherited definition), or a recorded fingerprint cannot be
+  compared (a future version, or an overloaded symbol).
 
 Precedence (one source of truth): `unverifiable` > `stale` > `current`.
+
+`stale` fires only on a provable mechanical mismatch; every uncertainty routes to
+`unverifiable`. A still-correct memory is therefore never flagged `stale` — at
+the cost of occasionally returning `unverifiable` for a fact that is in truth
+out of date.
 
 ## Supported languages
 
@@ -87,18 +99,75 @@ that top-level class body (one level deep).
 | TypeScript | `.ts` `.tsx` `.mts` `.cts` `.d.ts` | the JavaScript forms, plus `abstract class` and `.d.ts` ambient `declare`d functions/classes |
 
 `export` and `export default` are transparent — `export function f` resolves as
-`f`. Type-only and value-only declarations are intentionally **not** resolvable
-symbols, so an anchor to one is reported missing: TypeScript `interface`, `type`,
-and `enum`, and non-function constants such as `const MAX = 5`. A file whose
-extension is not in the table is reported `unsupported_language` (an
-`unverifiable` verdict).
+`f`. Type-only and value-only declarations are not resolvable callables, but the
+name is present, so an anchor to one is reported `symbol_indirect`
+(`unverifiable`), never missing: TypeScript `interface`, `type`, and `enum`, and
+non-function constants such as `const MAX = 5`. A file whose extension is not in
+the table is reported `unsupported_language` (an `unverifiable` verdict).
 
 For JavaScript/TypeScript a syntax error in one part of a file does not hide
 cleanly-parsed declarations elsewhere; a name that cannot be cleanly located in a
 file that fails to parse is reported `unverifiable`, never missing, so a syntax
 error never reads as a deletion. Resolution is structural, not semantic: it
-confirms a declaration with that name still exists, and does not follow
-re-exports, path aliases, or barrel files.
+confirms a declaration with that name still exists. It does not follow
+re-exports, path aliases, or barrel files — an anchor reachable only through one
+is reported `symbol_indirect` (`unverifiable`), never stale.
+
+## Interface fingerprints (call-shape drift)
+
+Symbol existence alone misses a whole class of staleness: a memory like "`parse`
+takes three arguments" stays *current* by existence even after `parse` drops an
+argument. An optional, opt-in interface fingerprint closes that gap without ever
+risking a false `stale`.
+
+The flow has two halves:
+
+1. **Capture.** When a memory is recorded, the consumer calls
+   `fingerprint_anchor(repo, anchor)` and persists the returned opaque token on
+   the anchor (e.g. in its `fingerprint` field). The token encodes the symbol's
+   call shape — arity, required vs optional parameters, `*args`/rest and
+   `**kwargs`, generator and async/await form, call-convention decorators
+   (`property`/`staticmethod`/`classmethod`; `static`/`getter`/`setter`), and
+   base-class count.
+2. **Verify.** When the record is later checked, msv re-derives the current call
+   shape and compares it to the recorded token.
+
+The comparison is **directional**: it flags drift only when a call that was valid
+under the recorded shape would now be invalid (a required argument added, the
+positional capacity dropped below what was required, `**kwargs` removed, a
+sync↔async or generator switch, a call-convention decorator toggled, a base
+removed). Purely additive changes — a new optional parameter, a new
+`*args`/`**kwargs`, a new base — never flag. Drift is reported `signature_changed`
+(verdict `stale`) with the symbol still `found` and `location` populated, so the
+evidence is preserved.
+
+Anything the comparison cannot decide routes to `unverifiable`, never `stale`: a
+token minted under a **future format version** msv cannot parse
+(`fingerprint_version_mismatch`), or an **overloaded / multiply-declared** symbol
+whose shape is ambiguous (`fingerprint_version_mismatch: ambiguous_overload`).
+
+> **Capture precondition.** `fingerprint_anchor` must be called **synchronously
+> at capture**, against the same working tree the agent saw. The token is the
+> baseline; minting it later, against a tree that has already drifted, would bake
+> the drift into the baseline and defeat the guarantee. msv mints from the exact
+> file bytes on disk — never reconstructed from a commit — so a dirty working
+> tree never produces a false baseline.
+
+```python
+from msv import Anchor, Record, fingerprint_anchor, verify_records
+
+anchor = Anchor(path="pkg/parser.py", symbol="parse")
+token = fingerprint_anchor("/path/to/repo", anchor)        # at capture
+stored = Anchor(path=anchor.path, symbol=anchor.symbol, fingerprint=token)
+
+# ...later, after the code may have changed...
+verdicts, summary = verify_records("/path/to/repo", [
+    Record(id="m1", claim_text="parse takes three args", anchors=(stored,)),
+])
+```
+
+A fingerprint is honored only alongside a `symbol`; an anchor with a fingerprint
+but no symbol is inert. The token is opaque — treat it as a blob, never parse it.
 
 ## API / Reference
 
@@ -106,7 +175,7 @@ Import the public surface from the top-level package:
 
 ```python
 from msv import (
-    verify_records, verify_record, resolve_anchor,
+    verify_records, verify_record, resolve_anchor, fingerprint_anchor,
     Record, Anchor, AnchorResult, RecordVerdict, RunSummary, Verdict,
 )
 ```
@@ -131,7 +200,19 @@ The single-anchor resolver. A total function — it never raises on an expected
 condition (missing file, parse error, path outside the repo, unsupported
 language); each becomes an `AnchorResult`. `found` is `True` iff the anchor path
 is inside `repo_root`, the file exists, parses, and (if a symbol is given) the
-symbol resolves in that file's language.
+symbol resolves in that file's language. When the anchor carries a `fingerprint`
+and the symbol resolves, the recorded call shape is compared (see
+[Interface fingerprints](#interface-fingerprints-call-shape-drift)).
+
+```python
+fingerprint_anchor(repo_root: str, anchor: Anchor) -> str | None
+```
+The capture seam. Resolves the anchor read-only and returns an opaque call-shape
+token when the symbol resolves to a single callable, else `None` (no symbol; the
+symbol is absent, indirect, or overloaded; the file is missing, unparseable, or
+unsupported; or the path escapes the repo). A total function — never raises. Call
+it **synchronously at capture**, against the working tree the agent saw; see
+[Interface fingerprints](#interface-fingerprints-call-shape-drift).
 
 ### Data types
 
@@ -139,12 +220,15 @@ All data types are frozen dataclasses; `Verdict` is the literal
 `"current" | "stale" | "unverifiable"`.
 
 ```python
-Anchor(path: str, symbol: str | None = None)
+Anchor(path: str, symbol: str | None = None, fingerprint: str | None = None)
 ```
 `path` is repo-relative; its extension selects the language. `symbol` is a
 top-level function/class name, or a dotted `"Class.method"` resolved one level
 deep into the top-level class body (nested defs are out of scope). See
 [Supported languages](#supported-languages) for the per-language symbol forms.
+`fingerprint` is an opaque, msv-minted call-shape token (see
+[Interface fingerprints](#interface-fingerprints-call-shape-drift)); it is
+honored only alongside a `symbol`, and a fingerprint with no symbol is inert.
 
 ```python
 Record(id: str, claim_text: str,
@@ -157,11 +241,12 @@ Record(id: str, claim_text: str,
 AnchorResult(path: str, symbol: str | None, found: bool,
              location: str | None, reason: str)
 ```
-`location` is e.g. `"pkg/auth.py:42"` when found, else `None`. `reason` is a
-machine-stable code, optionally with detail — one of: `ok`,
-`no_symbol_requested`, `file_missing`, `symbol_missing`, `path_outside_repo`,
-`parse_error`, `unsupported_language` (the last five carry a `: <detail>`
-suffix).
+`location` is e.g. `"pkg/auth.py:42"` when found, else `None` — but it stays
+populated for `signature_changed`, where the symbol exists and only its shape
+drifted. `reason` is a machine-stable code, optionally with a `: <detail>`
+suffix — one of: `ok`, `no_symbol_requested`, `file_missing`, `symbol_missing`,
+`symbol_indirect`, `signature_changed`, `fingerprint_version_mismatch`,
+`path_outside_repo`, `parse_error`, `unsupported_language`.
 
 ```python
 RecordVerdict(id: str, verdict: Verdict, anchors: tuple[AnchorResult, ...])
