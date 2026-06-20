@@ -154,6 +154,27 @@ def tmp_ts_repo(tmp_path: Path) -> Path:
     return root
 
 
+@pytest.fixture
+def make_repo(tmp_path: Path):
+    """Return a builder: make_repo({rel_path: text, ...}) -> repo root str.
+
+    Materializes an arbitrary file layout under a fresh subdirectory, so each
+    re-export-following test can specify exactly the source/target files it
+    needs (a target with or without the symbol, a submodule, a second hop).
+    """
+
+    def _build(files: dict[str, str], name: str = "repo") -> str:
+        root = tmp_path / name
+        for rel, text in files.items():
+            dest = root / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(text, encoding="utf-8")
+        root.mkdir(parents=True, exist_ok=True)  # an empty layout still has a root
+        return str(root)
+
+    return _build
+
+
 def snapshot_tree(root: Path) -> dict[str, tuple[float, int]]:
     """Map every file under root to (mtime_ns, size) for tamper detection."""
     snap: dict[str, tuple[float, int]] = {}

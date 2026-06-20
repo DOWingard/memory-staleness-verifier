@@ -68,6 +68,25 @@ def test_no_new_files_created_in_repo(tmp_repo: Path):
     assert after == before  # e.g. no __pycache__ from an accidental import
 
 
+def test_follow_reexport_is_read_only(make_repo):
+    # Following a re-export reads the target as data only: no file in the repo
+    # (importer or followed source) may be created, deleted, or modified.
+    repo = make_repo({
+        "pkg/__init__.py": "",
+        "pkg/api.py": "from .core import parse\n",
+        "pkg/core.py": "def parse(x):\n    return x\n",
+        "src/index.ts": "export { Button } from './Button';\n",
+        "src/Button.tsx": "export function Button() {}\n",
+    })
+    before = snapshot_tree(Path(repo))
+    for anchor in [
+        Anchor("pkg/api.py", "parse"),
+        Anchor("src/index.ts", "Button"),
+    ]:
+        resolve_anchor(repo, anchor)
+    assert snapshot_tree(Path(repo)) == before
+
+
 def test_ts_resolution_is_read_only(tmp_ts_repo: Path):
     # tree-sitter parses source as data; resolving JS/TS must not create,
     # delete, or modify any file in the target repo.

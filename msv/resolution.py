@@ -76,11 +76,75 @@ def resolve_anchor(repo_root: str, anchor: Anchor) -> AnchorResult:
         source = handle.read()
 
     lookup = symbols.locate(source, anchor.path, anchor.symbol)
-    return _to_anchor_result(anchor, lookup)
+    lookup, source_path = _follow_reexport(repo_root, anchor.path, lookup)
+    return _to_anchor_result(anchor, lookup, source_path)
 
 
-def _to_anchor_result(anchor: Anchor, lookup: SymbolLookup) -> AnchorResult:
-    """Map a structural SymbolLookup onto the reason-coded AnchorResult."""
+def _first_existing_candidate(
+    repo_root: str, candidates: tuple[str, ...]
+) -> tuple[str, str] | None:
+    """First candidate that is in-repo and a real file: (rel_path, abs_path).
+
+    Containment is checked per candidate, so a candidate that escapes the repo
+    is skipped — a re-export can never be followed out of the repository.
+    """
+    for rel in candidates:
+        abs_path = _within_repo(repo_root, rel)
+        if abs_path is not None and os.path.isfile(abs_path):
+            return rel, abs_path
+    return None
+
+
+def _follow_reexport(
+    repo_root: str, importer_path: str, lookup: SymbolLookup
+) -> tuple[SymbolLookup, str]:
+    """Follow ONE named relative re-export edge to its source declaration.
+
+    If `lookup` carries a followable edge, resolve it to a single in-repo target
+    and re-locate the original name there; otherwise return `lookup` and
+    `importer_path` unchanged. Returns (possibly-upgraded lookup, path the
+    location should reference). Total — never raises; read-only.
+
+    indirect upgrades to found/missing only on a clean landing:
+      - first in-repo module candidate that is a readable file is the target;
+      - target 'found'   -> (target lookup, target path)   [interface flows on];
+      - target 'missing' -> a submodule of the package -> stay indirect;
+                            else provable absence -> (target lookup, target path);
+      - target 'indirect' (2nd hop) / 'parse_error' / 'unsupported' -> stay indirect;
+      - no candidate resolves / unreadable -> stay indirect.
+    """
+    edge = lookup.reexport
+    if edge is None:
+        return lookup, importer_path
+    target = _first_existing_candidate(repo_root, edge.module_candidates)
+    if target is None:
+        return lookup, importer_path
+    target_rel, target_abs = target
+    try:
+        with open(target_abs, "r", encoding="utf-8") as handle:
+            source = handle.read()
+    except (OSError, UnicodeDecodeError):
+        return lookup, importer_path
+    target_lookup = symbols.locate(source, target_rel, edge.name)
+    if target_lookup.status == "found":
+        return target_lookup, target_rel
+    if target_lookup.status == "missing":
+        if _first_existing_candidate(repo_root, edge.submodule_candidates) is not None:
+            # The name is a submodule file of the package, not a deleted symbol.
+            return lookup, importer_path
+        return target_lookup, target_rel  # provable absence at the source -> stale
+    # A second hop, an unparseable target, or an unsupported language is
+    # uncertain: keep the original indirect, never stale.
+    return lookup, importer_path
+
+
+def _to_anchor_result(anchor: Anchor, lookup: SymbolLookup, source_path: str) -> AnchorResult:
+    """Map a structural SymbolLookup onto the reason-coded AnchorResult.
+
+    `source_path` is the importer's own path, or — when a re-export was
+    followed — the resolved source file, so `location` and a followed
+    `symbol_missing` both point at the real declaration site.
+    """
     if lookup.status == "unsupported":
         return AnchorResult(
             path=anchor.path,
@@ -100,12 +164,17 @@ def _to_anchor_result(anchor: Anchor, lookup: SymbolLookup) -> AnchorResult:
         )
 
     if lookup.status == "missing":
+        # A followed re-export names its resolved source so the deletion is
+        # locatable (a missing result otherwise carries no location).
+        detail = anchor.symbol
+        if source_path != anchor.path:
+            detail = f"{anchor.symbol} (via {source_path})"
         return AnchorResult(
             path=anchor.path,
             symbol=anchor.symbol,
             found=False,
             location=None,
-            reason=f"{REASON_SYMBOL_MISSING}: {anchor.symbol}",
+            reason=f"{REASON_SYMBOL_MISSING}: {detail}",
         )
 
     if lookup.status == "indirect":
@@ -128,7 +197,7 @@ def _to_anchor_result(anchor: Anchor, lookup: SymbolLookup) -> AnchorResult:
             location=f"{anchor.path}:1",
             reason=REASON_NO_SYMBOL_REQUESTED,
         )
-    location = f"{anchor.path}:{lookup.lineno}"
+    location = f"{source_path}:{lookup.lineno}"
     if anchor.fingerprint is None:
         return AnchorResult(
             path=anchor.path,
