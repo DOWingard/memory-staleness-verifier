@@ -9,7 +9,11 @@ description = "Store-agnostic verifier that re-checks the factual currency of co
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
-dependencies = []
+dependencies = [
+    "tree-sitter>=0.25",
+    "tree-sitter-typescript>=0.23",
+    "tree-sitter-javascript>=0.25",
+]
 
 [project.optional-dependencies]
 dev = ["pytest"]
