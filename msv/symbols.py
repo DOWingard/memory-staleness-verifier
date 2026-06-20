@@ -32,6 +32,22 @@ LookupStatus = Literal["found", "missing", "indirect", "parse_error", "unsupport
 
 
 @dataclass(frozen=True, slots=True)
+class ReexportEdge:
+    """A followable named binding of `name` from another module.
+
+    Populated only for a relative, named, non-shadowed import/re-export. The
+    candidate lists are repo-relative target files in resolution-precedence
+    order, precomputed here as pure os.path string math — this module never
+    touches the filesystem, so the probing of these paths is left to the
+    language-blind resolution layer.
+    """
+
+    name: str  # ORIGINAL (pre-alias) name to resolve in the target module
+    module_candidates: tuple[str, ...]  # files the specifier may denote
+    submodule_candidates: tuple[str, ...]  # files meaning `name` is a SUBMODULE (Python only)
+
+
+@dataclass(frozen=True, slots=True)
 class SymbolLookup:
     status: LookupStatus
     lineno: int | None = None  # 1-based; 1 for a file-presence (symbol=None) hit
@@ -40,6 +56,8 @@ class SymbolLookup:
     # call-shape descriptor; populated iff status == "found" and a single
     # callable was requested. None for an overloaded/ambiguous symbol.
     interface: Interface | None = None
+    # set iff status == "indirect" AND the indirection is a followable edge
+    reexport: ReexportEdge | None = None
 
 
 # Internal language ids. Extension -> id; the id selects the parser backend and
@@ -129,22 +147,22 @@ def _locate_python(source: str, path: str, symbol: str | None) -> SymbolLookup:
     if symbol is None:
         return SymbolLookup(status="found", lineno=1)
     if "." in symbol:
-        return _locate_python_method(tree, symbol)
-    return _locate_python_name(tree, symbol)
+        return _locate_python_method(tree, path, symbol)
+    return _locate_python_name(tree, path, symbol)
 
 
-def _locate_python_name(tree: ast.Module, symbol: str) -> SymbolLookup:
+def _locate_python_name(tree: ast.Module, path: str, symbol: str) -> SymbolLookup:
     """Resolve a bare name to a top-level callable, else split missing/indirect."""
     matches = [n for n in tree.body if isinstance(n, _PY_DEF_NODES) and n.name == symbol]
     if matches:
         return _python_found(matches)
-    detail = _python_indirect_detail(tree, symbol)
+    detail, edge = _python_indirect_detail(tree, path, symbol)
     if detail is not None:
-        return SymbolLookup(status="indirect", detail=detail)
+        return SymbolLookup(status="indirect", detail=detail, reexport=edge)
     return SymbolLookup(status="missing")
 
 
-def _locate_python_method(tree: ast.Module, symbol: str) -> SymbolLookup:
+def _locate_python_method(tree: ast.Module, path: str, symbol: str) -> SymbolLookup:
     """Resolve a one-level "Class.method", inheritance-aware (see module rule)."""
     class_name, _, member = symbol.partition(".")
     for node in tree.body:
@@ -157,7 +175,9 @@ def _locate_python_method(tree: ast.Module, symbol: str) -> SymbolLookup:
             if node.bases:
                 return SymbolLookup(status="indirect", detail="maybe_inherited")
             return SymbolLookup(status="missing")
-    detail = _python_indirect_detail(tree, class_name)
+    # A class reached only via re-export is not followed for its method: one hop
+    # resolves the class, not the dotted member, so the edge is left off.
+    detail, _edge = _python_indirect_detail(tree, path, class_name)
     if detail is not None:
         return SymbolLookup(status="indirect", detail=detail)
     return SymbolLookup(status="missing")
@@ -237,18 +257,25 @@ def _node_has_yield(node: ast.AST) -> bool:
     return any(_node_has_yield(child) for child in ast.iter_child_nodes(node))
 
 
-def _python_indirect_detail(tree: ast.Module, name: str) -> str | None:
+def _python_indirect_detail(
+    tree: ast.Module, path: str, name: str
+) -> tuple[str | None, ReexportEdge | None]:
     """The mechanism making `name` present-but-not-a-top-level-callable, or None.
 
     None means the name is bound nowhere — provably absent (→ missing → stale).
     A non-None detail means some indirection could supply it (import/re-export,
     data binding, nested def, wildcard import, or module __getattr__), so its
     absence is not provable and the result is unverifiable, never stale.
+
+    The second element is a followable `ReexportEdge` iff the indirection is a
+    relative, named, non-shadowed import of `name`; for every other mechanism
+    it is None, so the one-hop follow can never widen beyond that case.
     """
     imported: set[str] = set()
     assigned: set[str] = set()
     declared: set[str] = set()  # def/class names at any nesting depth
     has_wildcard = False
+    edges: dict[str, ReexportEdge] = {}  # visible name -> followable edge
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -257,8 +284,14 @@ def _python_indirect_detail(tree: ast.Module, name: str) -> str | None:
             for alias in node.names:
                 if alias.name == "*":
                     has_wildcard = True
-                else:
-                    imported.add(alias.asname or alias.name)
+                    continue
+                visible = alias.asname or alias.name
+                imported.add(visible)
+                # Relative (level>=1) and module-qualified (`from .M import N`) is
+                # the only followable shape; `from . import N` (module is None)
+                # and absolute imports (level 0) are not.
+                if node.level >= 1 and node.module is not None:
+                    edges[visible] = _py_make_edge(path, node.level, node.module, alias.name)
         elif isinstance(node, _PY_DEF_NODES):
             declared.add(node.name)
         elif isinstance(node, ast.Assign):
@@ -268,20 +301,44 @@ def _python_indirect_detail(tree: ast.Module, name: str) -> str | None:
             _collect_target_names(node.target, assigned)
 
     if name in imported:
-        return "reexport"
+        # A local def/class/assignment shadows the import, so following it would
+        # fingerprint the wrong value; suppress the edge in that case.
+        shadowed = name in declared or name in assigned
+        return "reexport", (None if shadowed else edges.get(name))
     # A top-level callable was ruled out before this call, so a declared hit is
     # necessarily a nested/conditional definition.
     if name in declared:
-        return "nested"
+        return "nested", None
     if name in assigned:
-        return "noncallable"
+        return "noncallable", None
     if name in _python_all_members(tree):
-        return "reexport"
+        return "reexport", None
     if has_wildcard:
-        return "wildcard"
+        return "wildcard", None
     if _python_has_module_getattr(tree):
-        return "module_getattr"
-    return None
+        return "module_getattr", None
+    return None, None
+
+
+def _py_make_edge(importer_path: str, level: int, module: str, original: str) -> ReexportEdge:
+    """Compute the repo-relative candidate paths for `from <dots><module> import`.
+
+    `level` leading dots ascend `level-1` directories from the importer's own
+    directory; the dotted `module` becomes path segments under that base. The
+    result is pure string math (os.path only) — a candidate that walks above the
+    repo is rejected later by the resolution layer's containment check.
+    """
+    base = os.path.normpath(
+        os.path.join(os.path.dirname(importer_path), *([os.pardir] * (level - 1)), *module.split("."))
+    )
+    return ReexportEdge(
+        name=original,
+        module_candidates=(f"{base}.py", os.path.join(base, "__init__.py")),
+        submodule_candidates=(
+            os.path.join(base, f"{original}.py"),
+            os.path.join(base, original, "__init__.py"),
+        ),
+    )
 
 
 def _collect_target_names(target: ast.expr, acc: set[str]) -> None:

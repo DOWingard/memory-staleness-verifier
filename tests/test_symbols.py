@@ -9,7 +9,7 @@ that cannot be cleanly located in a file that failed to parse is unverifiable
 """
 from __future__ import annotations
 
-from msv.symbols import SymbolLookup, locate
+from msv.symbols import ReexportEdge, SymbolLookup, locate
 
 # --- Python parity (logic moved out of resolution.py) ------------------------
 
@@ -184,6 +184,83 @@ def test_py_overloaded_symbol_interface_is_none_but_found():
 
 def test_py_interface_none_when_no_symbol_requested():
     assert locate("x = 1\n", "a.py", None).interface is None
+
+
+# --- Python re-export edge: the followable one-hop binding --------------------
+# A relative, named, non-shadowed import carries a ReexportEdge with precomputed
+# repo-relative candidate paths; every other indirection leaves reexport None.
+
+
+def test_py_relative_named_import_sets_reexport_edge():
+    res = locate("from .core import parse\n", "pkg/api.py", "parse")
+    assert res.status == "indirect"
+    assert res.detail == "reexport"
+    edge = res.reexport
+    assert edge is not None
+    assert edge.name == "parse"
+    assert edge.module_candidates == ("pkg/core.py", "pkg/core/__init__.py")
+    assert edge.submodule_candidates == ("pkg/core/parse.py", "pkg/core/parse/__init__.py")
+
+
+def test_py_aliased_import_edge_uses_original_name():
+    # `as p` rebinds locally; the name resolved in the target stays the original.
+    res = locate("from .core import parse as p\n", "pkg/api.py", "p")
+    assert res.status == "indirect"
+    assert res.reexport is not None
+    assert res.reexport.name == "parse"
+    # The submodule guard also keys off the original (source) name.
+    assert res.reexport.submodule_candidates == ("pkg/core/parse.py", "pkg/core/parse/__init__.py")
+
+
+def test_py_candidate_paths_dotlevel():
+    # `..core.sub` ascends one package from pkg/sub/ and walks core/sub.
+    res = locate("from ..core.sub import thing\n", "pkg/sub/m.py", "thing")
+    assert res.reexport is not None
+    assert res.reexport.module_candidates == ("pkg/core/sub.py", "pkg/core/sub/__init__.py")
+
+
+def test_py_absolute_import_no_edge():
+    # An absolute specifier needs sys.path; it is never followed.
+    res = locate("from pkg.core import parse\n", "pkg/api.py", "parse")
+    assert res.status == "indirect"
+    assert res.detail == "reexport"
+    assert res.reexport is None
+
+
+def test_py_dot_only_import_no_edge():
+    # `from . import core` (module is None) names a package member, not a
+    # followable named re-export of a symbol.
+    res = locate("from . import core\n", "pkg/api.py", "core")
+    assert res.status == "indirect"
+    assert res.reexport is None
+
+
+def test_py_locally_shadowed_import_no_edge():
+    # A local rebinding shadows the import; following would fingerprint the
+    # wrong value, so the edge is suppressed.
+    res = locate("from .core import parse\nparse = _wrap(parse)\n", "pkg/api.py", "parse")
+    assert res.status == "indirect"
+    assert res.reexport is None
+
+
+def test_py_wildcard_has_no_edge():
+    res = locate("from .core import *\n", "pkg/api.py", "mystery")
+    assert res.status == "indirect"
+    assert res.detail == "wildcard"
+    assert res.reexport is None
+
+
+def test_py_nonfollowable_indirects_have_no_edge():
+    # Every non-import indirection stays edge-free (guards against widening).
+    for src, name in [
+        ("X = 5\n", "X"),  # noncallable
+        ("def outer():\n    def inner():\n        return 1\n", "inner"),  # nested
+        ("def __getattr__(n):\n    raise AttributeError(n)\n", "anything"),  # module_getattr
+        ("__all__ = ['ghost']\n", "ghost"),  # __all__ re-export, no module edge
+    ]:
+        res = locate(src, "a.py", name)
+        assert res.status == "indirect"
+        assert res.reexport is None
 
 
 # --- TypeScript: the recognized declaration forms ----------------------------
