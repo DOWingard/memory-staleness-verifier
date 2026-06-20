@@ -26,14 +26,15 @@ import tree_sitter_javascript as _ts_javascript
 import tree_sitter_typescript as _ts_typescript
 from tree_sitter import Language, Node, Parser
 
-LookupStatus = Literal["found", "missing", "parse_error", "unsupported"]
+LookupStatus = Literal["found", "missing", "indirect", "parse_error", "unsupported"]
 
 
 @dataclass(frozen=True, slots=True)
 class SymbolLookup:
     status: LookupStatus
     lineno: int | None = None  # 1-based; 1 for a file-presence (symbol=None) hit
-    detail: str | None = None  # parser message when status == "parse_error"
+    # mechanism for "indirect", parser message for "parse_error"
+    detail: str | None = None
 
 
 # Internal language ids. Extension -> id; the id selects the parser backend and
@@ -114,27 +115,135 @@ def _locate_python(source: str, path: str, symbol: str | None) -> SymbolLookup:
         return SymbolLookup(status="parse_error", detail=exc.msg)
     if symbol is None:
         return SymbolLookup(status="found", lineno=1)
-    lineno = _python_symbol_lineno(tree, symbol)
-    if lineno is None:
-        return SymbolLookup(status="missing")
-    return SymbolLookup(status="found", lineno=lineno)
-
-
-def _python_symbol_lineno(tree: ast.Module, symbol: str) -> int | None:
-    """1-based line of a top-level def/class, or a one-level "Class.method"."""
     if "." in symbol:
-        class_name, _, member = symbol.partition(".")
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef) and node.name == class_name:
-                for child in node.body:
-                    if isinstance(child, _PY_DEF_NODES) and child.name == member:
-                        return child.lineno
-                return None
-        return None
+        return _locate_python_method(tree, symbol)
+    return _locate_python_name(tree, symbol)
+
+
+def _locate_python_name(tree: ast.Module, symbol: str) -> SymbolLookup:
+    """Resolve a bare name to a top-level callable, else split missing/indirect."""
     for node in tree.body:
         if isinstance(node, _PY_DEF_NODES) and node.name == symbol:
-            return node.lineno
+            return SymbolLookup(status="found", lineno=node.lineno)
+    detail = _python_indirect_detail(tree, symbol)
+    if detail is not None:
+        return SymbolLookup(status="indirect", detail=detail)
+    return SymbolLookup(status="missing")
+
+
+def _locate_python_method(tree: ast.Module, symbol: str) -> SymbolLookup:
+    """Resolve a one-level "Class.method", inheritance-aware (see module rule)."""
+    class_name, _, member = symbol.partition(".")
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            for child in node.body:
+                if isinstance(child, _PY_DEF_NODES) and child.name == member:
+                    return SymbolLookup(status="found", lineno=child.lineno)
+            # The class is here but the method is not. With a base class the
+            # method may be inherited, so its absence is not provable.
+            if node.bases:
+                return SymbolLookup(status="indirect", detail="maybe_inherited")
+            return SymbolLookup(status="missing")
+    detail = _python_indirect_detail(tree, class_name)
+    if detail is not None:
+        return SymbolLookup(status="indirect", detail=detail)
+    return SymbolLookup(status="missing")
+
+
+def _python_indirect_detail(tree: ast.Module, name: str) -> str | None:
+    """The mechanism making `name` present-but-not-a-top-level-callable, or None.
+
+    None means the name is bound nowhere — provably absent (→ missing → stale).
+    A non-None detail means some indirection could supply it (import/re-export,
+    data binding, nested def, wildcard import, or module __getattr__), so its
+    absence is not provable and the result is unverifiable, never stale.
+    """
+    imported: set[str] = set()
+    assigned: set[str] = set()
+    declared: set[str] = set()  # def/class names at any nesting depth
+    has_wildcard = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                imported.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "*":
+                    has_wildcard = True
+                else:
+                    imported.add(alias.asname or alias.name)
+        elif isinstance(node, _PY_DEF_NODES):
+            declared.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                _collect_target_names(target, assigned)
+        elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+            _collect_target_names(node.target, assigned)
+
+    if name in imported:
+        return "reexport"
+    # A top-level callable was ruled out before this call, so a declared hit is
+    # necessarily a nested/conditional definition.
+    if name in declared:
+        return "nested"
+    if name in assigned:
+        return "noncallable"
+    if name in _python_all_members(tree):
+        return "reexport"
+    if has_wildcard:
+        return "wildcard"
+    if _python_has_module_getattr(tree):
+        return "module_getattr"
     return None
+
+
+def _collect_target_names(target: ast.expr, acc: set[str]) -> None:
+    """Collect names bound by an assignment target, recursing into unpacking."""
+    if isinstance(target, ast.Name):
+        acc.add(target.id)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for elt in target.elts:
+            _collect_target_names(elt, acc)
+    elif isinstance(target, ast.Starred):
+        _collect_target_names(target.value, acc)
+    # Attribute / Subscript targets bind no new module-level name; ignored.
+
+
+def _python_all_members(tree: ast.Module) -> set[str]:
+    """String entries of a top-level `__all__` list/tuple literal."""
+    members: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets
+        ):
+            members |= _string_literals(node.value)
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "__all__"
+            and node.value is not None
+        ):
+            members |= _string_literals(node.value)
+    return members
+
+
+def _string_literals(value: ast.expr) -> set[str]:
+    if not isinstance(value, (ast.List, ast.Tuple)):
+        return set()
+    return {
+        elt.value
+        for elt in value.elts
+        if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+    }
+
+
+def _python_has_module_getattr(tree: ast.Module) -> bool:
+    """True iff the module defines a top-level PEP 562 `__getattr__`."""
+    return any(
+        isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == "__getattr__"
+        for node in tree.body
+    )
 
 
 # --- JavaScript / TypeScript (tree-sitter) -----------------------------------

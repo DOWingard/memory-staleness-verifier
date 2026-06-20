@@ -28,6 +28,22 @@ def test_verify_record_missing_file_is_stale(tmp_repo: Path, make_record):
     assert rv.verdict == "stale"
 
 
+def test_verify_record_indirect_is_unverifiable(tmp_repo: Path, make_record):
+    # A present-but-indirect symbol (data binding) is never stale -> unverifiable.
+    rec = make_record("ind", ("pkg/auth.py", "TOKEN_TTL"))
+    assert verify_record(str(tmp_repo), rec).verdict == "unverifiable"
+
+
+def test_verify_record_indirect_dominates_stale(tmp_repo: Path, make_record):
+    # Indirect (unverifiable) + a missing file (stale-signal) -> unverifiable.
+    rec = make_record(
+        "ind2",
+        ("pkg/auth.py", "TOKEN_TTL"),   # indirect -> unverifiable
+        ("pkg/deleted.py", "x"),        # stale-signal
+    )
+    assert verify_record(str(tmp_repo), rec).verdict == "unverifiable"
+
+
 def test_verify_record_no_anchors_unverifiable(tmp_repo: Path, make_record):
     rec = make_record("m4")  # zero anchors
     rv = verify_record(str(tmp_repo), rec)

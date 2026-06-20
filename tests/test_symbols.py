@@ -32,6 +32,73 @@ def test_python_missing_symbol_in_clean_file():
     assert locate("def f():\n    pass\n", "a.py", "ghost").status == "missing"
 
 
+# --- Python Layer A: absent (missing/stale) vs present-but-indirect -----------
+
+
+def test_py_data_binding_is_indirect_not_missing():
+    # A module-level data binding is present, just not a callable -> indirect.
+    res = locate("X = 5\n", "a.py", "X")
+    assert res.status == "indirect"
+    assert res.detail == "noncallable"
+
+
+def test_py_reexport_is_indirect():
+    res = locate("from .core import parse\n", "a.py", "parse")
+    assert res.status == "indirect"
+    assert res.detail == "reexport"
+
+
+def test_py_wildcard_makes_absence_indirect():
+    # A star-import may supply the name, so absence is not provable.
+    res = locate("from x import *\n", "a.py", "mystery")
+    assert res.status == "indirect"
+    assert res.detail == "wildcard"
+
+
+def test_py_module_getattr_is_indirect():
+    # PEP 562 module __getattr__ can synthesize any name on access.
+    src = "def __getattr__(name):\n    raise AttributeError(name)\n"
+    res = locate(src, "a.py", "anything")
+    assert res.status == "indirect"
+    assert res.detail == "module_getattr"
+
+
+def test_py_nested_def_is_indirect():
+    src = "def outer():\n    def inner():\n        return 1\n    return inner\n"
+    res = locate(src, "a.py", "inner")
+    assert res.status == "indirect"
+    assert res.detail == "nested"
+
+
+def test_py_truly_absent_is_missing_stale():
+    # Name bound nowhere in a clean file -> provably absent -> missing (stale).
+    # Guards against over-suppression turning real deletions into unverifiable.
+    assert locate("def f():\n    return 1\n", "a.py", "ghost").status == "missing"
+
+
+def test_py_method_maybe_inherited_is_indirect():
+    src = (
+        "class Base:\n    def shared(self):\n        return 1\n\n"
+        "class Sub(Base):\n    def own(self):\n        return 2\n"
+    )
+    assert locate(src, "a.py", "Sub.shared").status == "indirect"
+    assert locate(src, "a.py", "Sub.shared").detail == "maybe_inherited"
+    assert locate(src, "a.py", "Sub.own").status == "found"
+    assert locate(src, "a.py", "Base.shared").status == "found"
+
+
+def test_py_method_absent_no_base_is_missing():
+    # No base class to inherit from, method absent -> provably missing (stale).
+    src = "class C:\n    def m(self):\n        return 1\n"
+    assert locate(src, "a.py", "C.ghost").status == "missing"
+
+
+def test_py_method_on_indirect_class_is_indirect():
+    # The class itself only arrives via re-export; we cannot resolve its method.
+    res = locate("from .models import Widget\n", "a.py", "Widget.render")
+    assert res.status == "indirect"
+
+
 def test_python_symbol_none_is_file_presence():
     res = locate("x = 1\n", "a.py", None)
     assert res.status == "found"

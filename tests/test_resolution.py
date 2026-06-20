@@ -10,6 +10,7 @@ from msv.types import (
     REASON_OK,
     REASON_PARSE_ERROR,
     REASON_PATH_OUTSIDE_REPO,
+    REASON_SYMBOL_INDIRECT,
     REASON_SYMBOL_MISSING,
     Anchor,
 )
@@ -81,6 +82,15 @@ def test_resolve_method_dotted_on_missing_class(tmp_repo: Path):
     res = resolve_anchor(str(tmp_repo), Anchor("pkg/auth.py", "Ghost.login"))
     assert res.found is False
     assert res.reason.startswith(REASON_SYMBOL_MISSING)
+
+
+def test_resolve_indirect_symbol_is_unverifiable_reason(tmp_repo: Path):
+    # TOKEN_TTL is a module-level data binding: present, but not a callable.
+    res = resolve_anchor(str(tmp_repo), Anchor("pkg/auth.py", "TOKEN_TTL"))
+    assert res.found is False
+    assert res.location is None
+    assert res.reason.startswith(REASON_SYMBOL_INDIRECT)
+    assert "noncallable" in res.reason
 
 
 def test_resolve_missing_file_reason(tmp_repo: Path):

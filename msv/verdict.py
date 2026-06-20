@@ -11,6 +11,7 @@ from msv.resolution import resolve_anchor
 from msv.types import (
     REASON_PARSE_ERROR,
     REASON_PATH_OUTSIDE_REPO,
+    REASON_SYMBOL_INDIRECT,
     REASON_UNSUPPORTED_LANGUAGE,
     AnchorResult,
     Record,
@@ -24,6 +25,7 @@ _UNVERIFIABLE_PREFIXES = (
     REASON_PATH_OUTSIDE_REPO,
     REASON_PARSE_ERROR,
     REASON_UNSUPPORTED_LANGUAGE,
+    REASON_SYMBOL_INDIRECT,
 )
 
 

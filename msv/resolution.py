@@ -17,6 +17,7 @@ from msv.types import (
     REASON_OK,
     REASON_PARSE_ERROR,
     REASON_PATH_OUTSIDE_REPO,
+    REASON_SYMBOL_INDIRECT,
     REASON_SYMBOL_MISSING,
     REASON_UNSUPPORTED_LANGUAGE,
     Anchor,
@@ -103,6 +104,17 @@ def _to_anchor_result(anchor: Anchor, lookup: SymbolLookup) -> AnchorResult:
             found=False,
             location=None,
             reason=f"{REASON_SYMBOL_MISSING}: {anchor.symbol}",
+        )
+
+    if lookup.status == "indirect":
+        # Present but not a resolvable callable: absence is not provable, so this
+        # is unverifiable, never stale. The detail names the indirection.
+        return AnchorResult(
+            path=anchor.path,
+            symbol=anchor.symbol,
+            found=False,
+            location=None,
+            reason=f"{REASON_SYMBOL_INDIRECT}: {lookup.detail}",
         )
 
     # status == "found"
