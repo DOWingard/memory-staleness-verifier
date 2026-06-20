@@ -101,7 +101,14 @@ _TS_FUNCTION_VALUES = frozenset(
 # `export default`, and `declare` should not hide the declaration they carry.
 _TS_BINDING_NODES = frozenset({"lexical_declaration", "variable_declaration"})
 _TS_EXPORT = "export_statement"
+_TS_IMPORT = "import_statement"
 _TS_AMBIENT = "ambient_declaration"
+# Module-file resolution precedence for a relative specifier, and the extensions
+# a specifier may already carry (`./m.ts`, `./m.js`). A `.js`-family specifier in
+# a TS project also resolves to the `.ts`/`.tsx` source it was compiled from.
+_TS_RESOLVE_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_TS_REWRITE_EXTS = frozenset({".js", ".jsx", ".mjs", ".cjs"})
+_TS_SPECIFIER_EXTS = frozenset(_TS_RESOLVE_EXTS) | {".mts", ".cts"}
 # Value/type-only declarations: present, but never a resolvable callable.
 _TS_TYPE_DECL_NODES = frozenset(
     {"interface_declaration", "type_alias_declaration", "enum_declaration"}
@@ -126,7 +133,7 @@ def locate(source: str, path: str, symbol: str | None) -> SymbolLookup:
         return SymbolLookup(status="unsupported")
     if language == _PYTHON:
         return _locate_python(source, path, symbol)
-    return _locate_treesitter(source, symbol, language)
+    return _locate_treesitter(source, path, symbol, language)
 
 
 def _language_for_path(path: str) -> str | None:
@@ -393,7 +400,7 @@ def _python_has_module_getattr(tree: ast.Module) -> bool:
 # --- JavaScript / TypeScript (tree-sitter) -----------------------------------
 
 
-def _locate_treesitter(source: str, symbol: str | None, language: str) -> SymbolLookup:
+def _locate_treesitter(source: str, path: str, symbol: str | None, language: str) -> SymbolLookup:
     root = _PARSERS[language].parse(source.encode("utf-8")).root_node
 
     if symbol is None:
@@ -415,19 +422,19 @@ def _locate_treesitter(source: str, symbol: str | None, language: str) -> Symbol
     if nodes or root.has_error:
         return SymbolLookup(status="parse_error", detail="syntax error")
     # Clean parse, not a resolvable top-level callable: split absent vs indirect.
-    return _ts_absent_or_indirect(root, symbol)
+    return _ts_absent_or_indirect(root, path, symbol)
 
 
-def _ts_absent_or_indirect(root: Node, symbol: str) -> SymbolLookup:
+def _ts_absent_or_indirect(root: Node, path: str, symbol: str) -> SymbolLookup:
     if "." in symbol:
-        return _ts_method_absent_or_indirect(root, symbol)
-    detail = _ts_indirect_detail(root, symbol)
+        return _ts_method_absent_or_indirect(root, path, symbol)
+    detail, edge = _ts_indirect_detail(root, path, symbol)
     if detail is not None:
-        return SymbolLookup(status="indirect", detail=detail)
+        return SymbolLookup(status="indirect", detail=detail, reexport=edge)
     return SymbolLookup(status="missing")
 
 
-def _ts_method_absent_or_indirect(root: Node, symbol: str) -> SymbolLookup:
+def _ts_method_absent_or_indirect(root: Node, path: str, symbol: str) -> SymbolLookup:
     """Dotted "Class.method" with the method not in the class body."""
     class_name, _, _member = symbol.partition(".")
     class_node = _find_top_level_class(root, class_name)
@@ -437,7 +444,9 @@ def _ts_method_absent_or_indirect(root: Node, symbol: str) -> SymbolLookup:
         if _ts_class_has_heritage(class_node):
             return SymbolLookup(status="indirect", detail="maybe_inherited")
         return SymbolLookup(status="missing")
-    detail = _ts_indirect_detail(root, class_name)
+    # A class reached only via re-export is not followed for its method: one hop
+    # resolves the class, not the dotted member, so the edge is left off.
+    detail, _edge = _ts_indirect_detail(root, path, class_name)
     if detail is not None:
         return SymbolLookup(status="indirect", detail=detail)
     return SymbolLookup(status="missing")
@@ -544,13 +553,19 @@ def _ts_class_has_heritage(class_node: Node) -> bool:
     return any(child.type == "class_heritage" for child in class_node.named_children)
 
 
-def _ts_indirect_detail(root: Node, name: str) -> str | None:
+def _ts_indirect_detail(
+    root: Node, path: str, name: str
+) -> tuple[str | None, ReexportEdge | None]:
     """The mechanism making `name` present-but-not-a-top-level-callable, or None.
 
     Mirrors the Python rule: None means the name is bound nowhere (provably
     absent → missing → stale); a non-None detail names an indirection that could
     supply the name (import/re-export, data/type binding, nested declaration,
     barrel star export, or a CommonJS dynamic export), making it unverifiable.
+
+    The second element is a followable `ReexportEdge` iff the indirection is a
+    relative, named, non-shadowed import/re-export of `name`; for every other
+    mechanism it is None.
     """
     imported: set[str] = set()
     declared: set[str] = set()  # function/class declarations at any depth
@@ -582,18 +597,85 @@ def _ts_indirect_detail(root: Node, name: str) -> str | None:
             has_commonjs = True
 
     if name in imported:
-        return "reexport"
+        # A local declaration/value binding shadows the import; following it
+        # would fingerprint the wrong value, so the edge is suppressed.
+        shadowed = name in declared or name in value_bound
+        edge = None if shadowed else _ts_reexport_edges(root, path).get(name)
+        return "reexport", edge
     # A top-level callable was ruled out before this call, so a declared hit is
     # necessarily a nested/conditional definition.
     if name in declared:
-        return "nested"
+        return "nested", None
     if name in value_bound:
-        return "noncallable"
+        return "noncallable", None
     if has_barrel:
-        return "wildcard"
+        return "wildcard", None
     if has_commonjs:
-        return "commonjs_dynamic"
-    return None
+        return "commonjs_dynamic", None
+    return None, None
+
+
+def _ts_reexport_edges(root: Node, path: str) -> dict[str, ReexportEdge]:
+    """Followable edges keyed by visible name, from relative named import/re-export.
+
+    Scans top-level `import`/`export … from` statements; a default import, a
+    namespace import, a star re-export, and an `export { x }` without a source
+    bind no followable named edge. JS/TS never yields submodule candidates.
+    """
+    edges: dict[str, ReexportEdge] = {}
+    for stmt in root.named_children:
+        if stmt.type not in (_TS_IMPORT, _TS_EXPORT):
+            continue
+        source = stmt.child_by_field_name("source")
+        if source is None:
+            continue  # `export { x }` with no `from` re-binds; supplies no module
+        specifier = _ts_string_value(source)
+        if specifier is None or not specifier.startswith("."):
+            continue  # bare/absolute specifier needs node_modules; not followable
+        candidates = _ts_module_candidates(path, specifier)
+        for spec in _walk_nodes(stmt):
+            if spec.type not in ("import_specifier", "export_specifier"):
+                continue
+            name_node = spec.child_by_field_name("name")
+            alias_node = spec.child_by_field_name("alias")
+            original = _node_text(name_node) if name_node is not None else None
+            if original is None:
+                continue
+            visible = _node_text(alias_node) if alias_node is not None else original
+            if visible is None:
+                continue
+            edges[visible] = ReexportEdge(
+                name=original, module_candidates=candidates, submodule_candidates=()
+            )
+    return edges
+
+
+def _ts_string_value(node: Node) -> str | None:
+    """The text of a string literal node, without surrounding quotes."""
+    for child in node.named_children:
+        if child.type == "string_fragment":
+            return _node_text(child)
+    text = _node_text(node)  # an empty string literal has no fragment child
+    if text is not None and len(text) >= 2 and text[0] in "\"'`":
+        return text[1:-1]
+    return text
+
+
+def _ts_module_candidates(importer_path: str, specifier: str) -> tuple[str, ...]:
+    """Repo-relative files a relative specifier may denote, in resolution order."""
+    base = os.path.normpath(os.path.join(os.path.dirname(importer_path), specifier))
+    _stem, ext = os.path.splitext(base)
+    if ext.lower() in _TS_SPECIFIER_EXTS:
+        # An explicit extension leads; a .js-family import also resolves to the
+        # TS source it compiles from.
+        candidates = [base]
+        if ext.lower() in _TS_REWRITE_EXTS:
+            candidates += [_stem + ".ts", _stem + ".tsx"]
+        return tuple(candidates)
+    return tuple(
+        [base + ext for ext in _TS_RESOLVE_EXTS]
+        + [os.path.join(base, "index" + ext) for ext in _TS_RESOLVE_EXTS]
+    )
 
 
 def _is_barrel_export(node: Node) -> bool:

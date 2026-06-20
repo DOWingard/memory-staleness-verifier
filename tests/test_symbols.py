@@ -412,6 +412,105 @@ def test_js_commonjs_exports_member_is_indirect():
     assert res.detail == "commonjs_dynamic"
 
 
+# --- TypeScript re-export edge: the followable one-hop binding ----------------
+# A relative, named import/re-export carries a ReexportEdge; bare specifiers,
+# default/namespace imports, star re-exports, and shadowed names do not.
+
+
+def test_ts_named_import_sets_edge():
+    res = locate("import { parse } from './core';\n", "src/index.ts", "parse")
+    assert res.status == "indirect"
+    assert res.detail == "reexport"
+    edge = res.reexport
+    assert edge is not None
+    assert edge.name == "parse"
+    assert "src/core.ts" in edge.module_candidates
+    assert "src/core/index.ts" in edge.module_candidates
+
+
+def test_ts_barrel_named_reexport_sets_edge():
+    res = locate("export { Button } from './Button';\n", "src/index.ts", "Button")
+    assert res.status == "indirect"
+    edge = res.reexport
+    assert edge is not None
+    assert edge.name == "Button"
+    assert "src/Button.tsx" in edge.module_candidates
+    assert any(c.startswith("src/Button/index.") for c in edge.module_candidates)
+
+
+def test_ts_submodule_candidates_empty():
+    # A JS named re-export never denotes a submodule file -> no submodule guard.
+    res = locate("export { Button } from './Button';\n", "src/index.ts", "Button")
+    assert res.reexport is not None
+    assert res.reexport.submodule_candidates == ()
+
+
+def test_ts_aliased_reexport_edge_uses_original_name():
+    src = "export { orig as parse } from './core';\n"
+    # The externally-visible alias follows to its original source name.
+    parse = locate(src, "src/index.ts", "parse")
+    assert parse.reexport is not None
+    assert parse.reexport.name == "orig"
+    # The bare source name is not a local binding here -> not followable.
+    assert locate(src, "src/index.ts", "orig").reexport is None
+
+
+def test_ts_split_reexport_follows_import_edge():
+    # `import { x } from './y'; export { x };` — the edge is the import's.
+    src = "import { x } from './y';\nexport { x };\n"
+    res = locate(src, "src/index.ts", "x")
+    assert res.reexport is not None
+    assert res.reexport.name == "x"
+    assert "src/y.ts" in res.reexport.module_candidates
+
+
+def test_ts_bare_specifier_no_edge():
+    # A bare specifier needs node_modules resolution; it is never followed.
+    res = locate("import { useState } from 'react';\n", "src/index.ts", "useState")
+    assert res.status == "indirect"
+    assert res.detail == "reexport"
+    assert res.reexport is None
+
+
+def test_ts_default_import_no_edge():
+    # A default import binds by local name, not the target's declaration name;
+    # following could falsely "miss" a differently-named default export.
+    res = locate("import Foo from './Button';\n", "src/index.ts", "Foo")
+    assert res.status == "indirect"
+    assert res.reexport is None
+
+
+def test_ts_namespace_import_no_edge():
+    res = locate("import * as ns from './core';\n", "src/index.ts", "ns")
+    assert res.status == "indirect"
+    assert res.reexport is None
+
+
+def test_ts_barrel_star_has_no_edge():
+    res = locate("export * from './core';\n", "src/index.ts", "mystery")
+    assert res.status == "indirect"
+    assert res.detail == "wildcard"
+    assert res.reexport is None
+
+
+def test_ts_explicit_extension_specifier_rewrites_to_ts():
+    # `./m.js` in TS resolves to the m.ts source it was compiled from.
+    res = locate("import { x } from './m.js';\n", "src/index.ts", "x")
+    assert res.reexport is not None
+    cands = res.reexport.module_candidates
+    assert cands[0] == "src/m.js"
+    assert "src/m.ts" in cands
+
+
+def test_ts_shadowed_import_no_edge():
+    # A local value binding shadows the imported name; the edge is suppressed.
+    src = "import { parse } from './core';\nconst parse = 5;\n"
+    res = locate(src, "src/index.ts", "parse")
+    assert res.status == "indirect"
+    assert res.detail == "reexport"
+    assert res.reexport is None
+
+
 # --- TypeScript: provable absence stays missing (stale); recall guard ----------
 
 
