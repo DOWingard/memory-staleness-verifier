@@ -1,0 +1,21 @@
+msv/schema.py
+  s_b259cb4203921c::t_6cce2463062410 13-19,23,34-58,72-84,91-212
+tests/test_schema.py
+  s_b259cb4203921c::t_d38cd08b0fcafc 36-119
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "95db3d8716c4e3cd9021f05c49e90d0c562ee250",
+  "prompts": {},
+  "sessions": {
+    "s_b259cb4203921c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e917fc03-8ae8-4d26-a2c3-705385d7b808",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
