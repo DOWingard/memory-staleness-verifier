@@ -1,0 +1,23 @@
+tests/test_reexport_following.py
+  s_887aeea3747f1e::t_8c5cfc1aa48ebc 13,15,17
+  s_887aeea3747f1e::t_860f4efbbe3067 190-288
+msv/resolution.py
+  s_887aeea3747f1e::t_ddf2503bc79ec6 276-277
+  s_887aeea3747f1e::t_9287c59f5403c4 278
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "cbfed30492713da88c98de698d35cad4c765e102",
+  "prompts": {},
+  "sessions": {
+    "s_887aeea3747f1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db71bbe2-6c63-49bc-819d-64435fccdd84",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
