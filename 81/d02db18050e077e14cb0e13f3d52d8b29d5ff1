@@ -1,0 +1,33 @@
+README.md
+  s_a98b0f2e5ce54b::t_f92cbafb7d06b0 54-58
+  s_a98b0f2e5ce54b::t_421880a5cea495 131-134
+  s_a98b0f2e5ce54b::t_18ea7150a19f9f 163-164
+  s_a98b0f2e5ce54b::t_66bdda5363a685 73,77-101
+  s_a98b0f2e5ce54b::t_b504cd9ea06141 240-243
+  s_a98b0f2e5ce54b::t_7c62ab3c857f5c 144-147
+  s_a98b0f2e5ce54b::t_221fe6992636f7 179-180
+  s_a98b0f2e5ce54b::t_854f8773c96aa5 4-5
+  s_a98b0f2e5ce54b::t_6035b5e77a868f 22-25
+  s_a98b0f2e5ce54b::t_9019ed74119609 29-30
+pyproject.toml
+  s_a98b0f2e5ce54b::t_77398d5e79f4b9 8
+msv/cli.py
+  s_a98b0f2e5ce54b::t_79455aa7362267 43-44
+  s_a98b0f2e5ce54b::t_79afaa296a98af 32-33
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "81d02db18050e077e14cb0e13f3d52d8b29d5ff1",
+  "prompts": {},
+  "sessions": {
+    "s_a98b0f2e5ce54b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1ed938ae-8694-4326-b2f8-2a96dc3a747f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
