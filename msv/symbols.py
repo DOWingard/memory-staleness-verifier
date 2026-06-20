@@ -344,12 +344,18 @@ def _locate_treesitter(source: str, symbol: str | None, language: str) -> Symbol
             return SymbolLookup(status="parse_error", detail="syntax error")
         return SymbolLookup(status="found", lineno=1)
 
-    node = _find_ts_symbol(root, symbol)
-    if node is not None and not node.has_error:
-        return SymbolLookup(status="found", lineno=node.start_point[0] + 1)
+    nodes = _find_ts_symbols(root, symbol)
+    clean = [node for node in nodes if not node.has_error]
+    if clean:
+        # More than one declaration of the same name (overload signatures, .d.ts
+        # merges) is an ambiguous shape: exists, but no single interface.
+        interface = _ts_interface(clean[0]) if len(clean) == 1 else None
+        return SymbolLookup(
+            status="found", lineno=clean[0].start_point[0] + 1, interface=interface
+        )
     # Not cleanly located. A name that is absent only because the parse failed
     # (the error may have swallowed its declaration) is unverifiable, not missing.
-    if node is not None or root.has_error:
+    if nodes or root.has_error:
         return SymbolLookup(status="parse_error", detail="syntax error")
     # Clean parse, not a resolvable top-level callable: split absent vs indirect.
     return _ts_absent_or_indirect(root, symbol)
@@ -380,18 +386,21 @@ def _ts_method_absent_or_indirect(root: Node, symbol: str) -> SymbolLookup:
     return SymbolLookup(status="missing")
 
 
-def _find_ts_symbol(root: Node, symbol: str) -> Node | None:
+def _find_ts_symbols(root: Node, symbol: str) -> list[Node]:
+    """All top-level declarations matching `symbol` (>1 means an overload set)."""
     if "." in symbol:
         class_name, _, member = symbol.partition(".")
+        matches: list[Node] = []
         for decl in _top_level_decls(root):
             if decl.type in _TS_CLASS_NODES and _node_name(decl) == class_name:
-                return _find_method(decl, member)
-        return None
+                matches.extend(_find_methods(decl, member))
+        return matches
+    matches = []
     for decl in _top_level_decls(root):
         match = _match_named_decl(decl, symbol)
         if match is not None:
-            return match
-    return None
+            matches.append(match)
+    return matches
 
 
 def _top_level_decls(root: Node) -> Iterator[Node]:
@@ -437,14 +446,15 @@ def _match_function_binding(decl: Node, symbol: str) -> Node | None:
     return None
 
 
-def _find_method(class_node: Node, member: str) -> Node | None:
+def _find_methods(class_node: Node, member: str) -> list[Node]:
     body = class_node.child_by_field_name("body")
     if body is None:
-        return None
-    for child in body.named_children:
-        if child.type in _TS_METHOD_NODES and _node_name(child) == member:
-            return child
-    return None
+        return []
+    return [
+        child
+        for child in body.named_children
+        if child.type in _TS_METHOD_NODES and _node_name(child) == member
+    ]
 
 
 def _node_name(node: Node) -> str | None:
@@ -554,3 +564,122 @@ def _is_commonjs_export(node: Node) -> bool:
         prop = left.child_by_field_name("property")
         return prop is not None and _node_text(prop) == "exports"
     return False
+
+
+# --- JS/TS interface extraction (Layer B) ------------------------------------
+
+# Standalone generator forms; method generators are flagged by a `*` token child.
+_TS_GENERATOR_NODES = frozenset(
+    {"generator_function_declaration", "generator_function"}
+)
+# method_definition keyword children that change how the member is invoked.
+_TS_DECORATOR_BY_KEYWORD = {"static": "static", "get": "getter", "set": "setter"}
+
+
+def _ts_interface(node: Node) -> Interface:
+    """Extract a language-neutral call-shape descriptor from a JS/TS declaration."""
+    if node.type in _TS_CLASS_NODES:
+        return Interface(
+            category="class",
+            is_generator=False,
+            req_positional=0,
+            max_positional=0,
+            has_star=False,
+            has_kw=False,
+            req_kwonly=0,
+            contract_decorators=frozenset(),
+            base_count=_ts_base_count(node),
+        )
+    callable_node = _ts_callable_node(node)
+    req, maximum, has_star = _ts_param_counts(callable_node)
+    return Interface(
+        category="async_func" if _ts_is_async(callable_node) else "func",
+        is_generator=_ts_is_generator(callable_node),
+        req_positional=req,
+        max_positional=maximum,
+        has_star=has_star,
+        has_kw=False,  # JS/TS has no **kwargs equivalent in v1
+        req_kwonly=0,  # JS/TS has no keyword-only parameters
+        contract_decorators=_ts_contract_decorators(node),
+        base_count=0,
+    )
+
+
+def _ts_callable_node(node: Node) -> Node:
+    """A const/let/var binding's callable is its value; everything else is itself."""
+    if node.type == "variable_declarator":
+        return node.child_by_field_name("value") or node
+    return node
+
+
+def _ts_param_counts(callable_node: Node) -> tuple[int, int, bool]:
+    """Return (required positional, max positional, has rest) for a callable."""
+    params = next(
+        (c for c in callable_node.named_children if c.type == "formal_parameters"),
+        None,
+    )
+    if params is None:
+        # A parenless single-parameter arrow `x => ...`: one required, no rest.
+        if callable_node.type == "arrow_function" and (
+            callable_node.child_by_field_name("parameter") is not None
+        ):
+            return 1, 1, False
+        return 0, 0, False
+    required = maximum = 0
+    has_star = False
+    for param in params.named_children:
+        kind = _ts_param_kind(param)
+        if kind == "rest":
+            has_star = True
+        elif kind in ("required", "optional", "default"):
+            maximum += 1
+            if kind == "required":
+                required += 1
+    return required, maximum, has_star
+
+
+def _ts_param_kind(param: Node) -> str:
+    """Classify a parameter: rest, optional, default-valued, required, or other."""
+    if any(child.type == "rest_pattern" for child in param.named_children):
+        return "rest"
+    if param.type == "optional_parameter":
+        return "optional"
+    if param.type == "required_parameter":
+        # A required_parameter node with a default value is optional at call time.
+        return "default" if param.child_by_field_name("value") is not None else "required"
+    return "other"
+
+
+def _ts_is_async(callable_node: Node) -> bool:
+    return any(child.type == "async" for child in callable_node.children)
+
+
+def _ts_is_generator(callable_node: Node) -> bool:
+    if callable_node.type in _TS_GENERATOR_NODES:
+        return True
+    # A generator method carries a bare `*` token before its name.
+    return any(child.type == "*" for child in callable_node.children)
+
+
+def _ts_contract_decorators(node: Node) -> frozenset[str]:
+    return frozenset(
+        _TS_DECORATOR_BY_KEYWORD[child.type]
+        for child in node.children
+        if child.type in _TS_DECORATOR_BY_KEYWORD
+    )
+
+
+def _ts_base_count(class_node: Node) -> int:
+    """Count extends + implements targets across the class heritage."""
+    count = 0
+    for child in class_node.named_children:
+        if child.type != "class_heritage":
+            continue
+        for clause in child.named_children:
+            if clause.type in ("extends_clause", "implements_clause"):
+                count += sum(
+                    1
+                    for target in clause.named_children
+                    if target.type != "type_arguments"
+                )
+    return count

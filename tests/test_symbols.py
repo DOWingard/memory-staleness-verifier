@@ -363,6 +363,74 @@ def test_ts_method_implements_is_maybe_inherited():
     assert locate(src, "a.ts", "C.other").status == "indirect"
 
 
+# --- TypeScript Layer B: interface extraction ---------------------------------
+
+
+def test_ts_interface_function_arity():
+    # a required; b? optional; c has a default -> 1 required of 3 positional.
+    iface = locate("function f(a: number, b?: string, c = 1) {}\n", "a.ts", "f").interface
+    assert iface is not None
+    assert iface.category == "func"
+    assert iface.req_positional == 1
+    assert iface.max_positional == 3
+    assert iface.has_star is False
+
+
+def test_ts_interface_rest_param():
+    iface = locate("function f(a, ...rest) {}\n", "a.ts", "f").interface
+    assert iface.req_positional == 1
+    assert iface.max_positional == 1
+    assert iface.has_star is True
+
+
+def test_ts_interface_async_category():
+    assert locate("async function f() {}\n", "a.ts", "f").interface.category == "async_func"
+
+
+def test_ts_interface_async_arrow_const():
+    assert locate("const f = async (a) => a;\n", "a.ts", "f").interface.category == "async_func"
+
+
+def test_ts_interface_generator_flag():
+    assert locate("function* g() {}\n", "a.ts", "g").interface.is_generator is True
+
+
+def test_ts_interface_arrow_const_arity():
+    iface = locate("const f = (a, b = 1) => a;\n", "a.ts", "f").interface
+    assert iface.req_positional == 1
+    assert iface.max_positional == 2
+
+
+def test_ts_interface_parenless_arrow_single_param():
+    # `x => x` has no formal_parameters node but is one required parameter.
+    iface = locate("const f = x => x;\n", "a.ts", "f").interface
+    assert iface.req_positional == 1
+    assert iface.max_positional == 1
+
+
+def test_ts_interface_method_static_and_getter_decorators():
+    src = "class C {\n  static s() {}\n  get x() { return 1; }\n}\n"
+    assert locate(src, "a.ts", "C.s").interface.contract_decorators == frozenset({"static"})
+    assert locate(src, "a.ts", "C.x").interface.contract_decorators == frozenset({"getter"})
+
+
+def test_ts_interface_class_base_count_extends_and_implements():
+    iface = locate("class C extends B implements I, J {}\n", "a.ts", "C").interface
+    assert iface.category == "class"
+    assert iface.base_count == 3
+
+
+def test_ts_overloaded_function_interface_is_none_but_found():
+    src = (
+        "function f(a: number): number;\n"
+        "function f(a: string): string;\n"
+        "function f(a: any): any { return a; }\n"
+    )
+    res = locate(src, "a.ts", "f")
+    assert res.status == "found"
+    assert res.interface is None
+
+
 # --- TypeScript: found-despite-error -----------------------------------------
 
 _BROKEN = "function good() {\n  return 1;\n}\nfunction bad( {\nfunction alsoGood() {}\n"

@@ -3,11 +3,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from msv.resolution import resolve_anchor
+from msv.resolution import fingerprint_anchor, resolve_anchor
 from msv.types import (
     REASON_NO_SYMBOL_REQUESTED,
     REASON_OK,
     REASON_PARSE_ERROR,
+    REASON_SIGNATURE_CHANGED,
     REASON_SYMBOL_INDIRECT,
     REASON_UNSUPPORTED_LANGUAGE,
     Anchor,
@@ -139,6 +140,51 @@ def test_unsupported_file_type(tmp_ts_repo: Path):
     res = resolve_anchor(str(tmp_ts_repo), Anchor("src/data.json", None))
     assert res.found is False
     assert res.reason.startswith(REASON_UNSUPPORTED_LANGUAGE)
+
+
+# --- Layer B: JS/TS fingerprint capture + drift -------------------------------
+
+
+def test_ts_fingerprint_anchor_mints_token(tmp_ts_repo: Path):
+    fp = fingerprint_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "refresh"))
+    assert fp is not None
+    assert fp.startswith("msv-fp/1:")
+
+
+def test_ts_fingerprint_anchor_none_for_interface(tmp_ts_repo: Path):
+    # A type-only declaration has no single callable interface to capture.
+    assert fingerprint_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "User")) is None
+
+
+def test_ts_fingerprint_match_is_ok(tmp_ts_repo: Path):
+    fp = fingerprint_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "refresh"))
+    res = resolve_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "refresh", fp))
+    assert res.found is True
+    assert res.reason == REASON_OK
+
+
+def test_ts_param_removed_is_signature_changed(tmp_ts_repo: Path):
+    # refresh(token: string) -> refresh(): a required parameter is removed.
+    fp = fingerprint_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "refresh"))
+    (tmp_ts_repo / "src/auth.ts").write_text(
+        "export function refresh(): string {\n  return '';\n}\n", encoding="utf-8"
+    )
+    res = resolve_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "refresh", fp))
+    assert res.found is True
+    assert res.location == "src/auth.ts:1"
+    assert res.reason.startswith(REASON_SIGNATURE_CHANGED)
+
+
+def test_ts_added_optional_param_is_ok(tmp_ts_repo: Path):
+    fp = fingerprint_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "refresh"))
+    (tmp_ts_repo / "src/auth.ts").write_text(
+        "export function refresh(token: string, opts?: object): string {\n"
+        "  return token;\n}\n",
+        encoding="utf-8",
+    )
+    res = resolve_anchor(str(tmp_ts_repo), Anchor("src/auth.ts", "refresh", fp))
+    assert res.found is True
+    assert res.reason == REASON_OK
 
 
 def test_python_file_in_same_repo_still_resolves(tmp_ts_repo: Path):
