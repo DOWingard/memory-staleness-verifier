@@ -1,0 +1,23 @@
+msv/schema.py
+  s_b259cb4203921c::t_48b66193bef373 219-427
+  s_b259cb4203921c::t_b52e2235578110 24,28-30
+  s_b259cb4203921c::t_30d26c332f6458 86-87
+tests/test_schema.py
+  s_b259cb4203921c::t_383b50035a73dd 120-254
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "be5c0237d7d3de700c527008165208882e95eb0c",
+  "prompts": {},
+  "sessions": {
+    "s_b259cb4203921c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e917fc03-8ae8-4d26-a2c3-705385d7b808",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
