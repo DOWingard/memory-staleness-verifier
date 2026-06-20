@@ -3,13 +3,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from msv.resolution import resolve_anchor
+from msv.resolution import fingerprint_anchor, resolve_anchor
 from msv.types import (
     REASON_FILE_MISSING,
+    REASON_FINGERPRINT_VERSION_MISMATCH,
     REASON_NO_SYMBOL_REQUESTED,
     REASON_OK,
     REASON_PARSE_ERROR,
     REASON_PATH_OUTSIDE_REPO,
+    REASON_SIGNATURE_CHANGED,
     REASON_SYMBOL_INDIRECT,
     REASON_SYMBOL_MISSING,
     Anchor,
@@ -117,6 +119,81 @@ def test_resolve_syntax_error_unverifiable(tmp_repo: Path):
     assert res.found is False
     assert res.location is None
     assert res.reason.startswith(REASON_PARSE_ERROR)
+
+
+# --- Layer B: capture (fingerprint_anchor) ------------------------------------
+
+
+def test_fingerprint_anchor_mints_versioned_token(tmp_repo: Path):
+    fp = fingerprint_anchor(str(tmp_repo), Anchor("pkg/parser.py", "parse"))
+    assert fp is not None
+    assert fp.startswith("msv-fp/1:")
+
+
+def test_fingerprint_anchor_none_without_symbol(tmp_repo: Path):
+    assert fingerprint_anchor(str(tmp_repo), Anchor("pkg/auth.py", None)) is None
+
+
+def test_fingerprint_anchor_none_for_noncallable(tmp_repo: Path):
+    # A data binding has no single-callable interface to capture.
+    assert fingerprint_anchor(str(tmp_repo), Anchor("pkg/auth.py", "TOKEN_TTL")) is None
+
+
+def test_fingerprint_anchor_none_for_missing_file(tmp_repo: Path):
+    assert fingerprint_anchor(str(tmp_repo), Anchor("pkg/nope.py", "x")) is None
+
+
+def test_fingerprint_anchor_none_outside_repo(tmp_repo: Path):
+    assert fingerprint_anchor(str(tmp_repo), Anchor("../escape.py", "x")) is None
+
+
+# --- Layer B: verify-time fingerprint comparison ------------------------------
+
+
+def test_resolve_fingerprint_match_is_ok(tmp_repo: Path):
+    fp = fingerprint_anchor(str(tmp_repo), Anchor("pkg/parser.py", "parse"))
+    res = resolve_anchor(str(tmp_repo), Anchor("pkg/parser.py", "parse", fp))
+    assert res.found is True
+    assert res.reason == REASON_OK
+    assert res.location == "pkg/parser.py:1"
+
+
+def test_resolve_fingerprint_mismatch_is_signature_changed(tmp_repo: Path):
+    fp = fingerprint_anchor(str(tmp_repo), Anchor("pkg/parser.py", "parse"))  # 3 args
+    (tmp_repo / "pkg/parser.py").write_text(
+        "def parse(a, b):\n    return (a, b)\n", encoding="utf-8"
+    )
+    res = resolve_anchor(str(tmp_repo), Anchor("pkg/parser.py", "parse", fp))
+    # Drift is stale-signal but the symbol is still right here: found + located.
+    assert res.found is True
+    assert res.location == "pkg/parser.py:1"
+    assert res.reason.startswith(REASON_SIGNATURE_CHANGED)
+    assert "->" in res.reason  # carries expected -> current evidence
+
+
+def test_resolve_fingerprint_additive_change_is_ok(tmp_repo: Path):
+    fp = fingerprint_anchor(str(tmp_repo), Anchor("pkg/parser.py", "parse"))  # 3 args
+    # An added optional argument breaks no previously-valid call.
+    (tmp_repo / "pkg/parser.py").write_text(
+        "def parse(a, b, c, d=1):\n    return (a, b, c, d)\n", encoding="utf-8"
+    )
+    res = resolve_anchor(str(tmp_repo), Anchor("pkg/parser.py", "parse", fp))
+    assert res.found is True
+    assert res.reason == REASON_OK
+
+
+def test_resolve_future_fingerprint_version_is_unverifiable(tmp_repo: Path):
+    token = "msv-fp/9:func(req=0,max=0,star=0,kw=0,kwo=0,gen=0,dec=,base=0)"
+    res = resolve_anchor(str(tmp_repo), Anchor("pkg/parser.py", "parse", token))
+    assert res.found is True
+    assert res.reason.startswith(REASON_FINGERPRINT_VERSION_MISMATCH)
+
+
+def test_resolve_fingerprint_without_symbol_is_inert(tmp_repo: Path):
+    # A fingerprint with no symbol is never honored -> plain file presence.
+    res = resolve_anchor(str(tmp_repo), Anchor("pkg/auth.py", None, "msv-fp/1:func(req=9)"))
+    assert res.found is True
+    assert res.reason == REASON_NO_SYMBOL_REQUESTED
 
 
 def test_resolve_is_total_does_not_raise(tmp_repo: Path):

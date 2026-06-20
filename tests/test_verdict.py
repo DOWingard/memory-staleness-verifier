@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from msv.resolution import fingerprint_anchor
+from msv.types import Anchor
 from msv.verdict import verify_record
 
 
@@ -107,6 +109,59 @@ def test_verify_record_preserves_anchor_order(tmp_repo: Path, make_record):
     assert [a.path for a in rv.anchors] == [
         "pkg/parser.py", "pkg/auth.py", "pkg/deleted.py",
     ]
+
+
+# --- Layer B: fingerprint drift verdicts --------------------------------------
+
+
+def test_py_fingerprint_capture_then_unchanged_is_current(tmp_repo: Path, make_record):
+    repo = str(tmp_repo)
+    fp = fingerprint_anchor(repo, Anchor("pkg/parser.py", "parse"))
+    rec = make_record("fp1", ("pkg/parser.py", "parse", fp))
+    rv = verify_record(repo, rec)
+    assert rv.verdict == "current"
+    assert rv.anchors[0].reason == "ok"
+
+
+def test_py_signature_changed_is_stale(tmp_repo: Path, make_record):
+    repo = str(tmp_repo)
+    fp = fingerprint_anchor(repo, Anchor("pkg/parser.py", "parse"))  # 3 args
+    (tmp_repo / "pkg/parser.py").write_text(
+        "def parse(a, b):\n    return (a, b)\n", encoding="utf-8"
+    )
+    rec = make_record("fp2", ("pkg/parser.py", "parse", fp))
+    rv = verify_record(repo, rec)
+    assert rv.verdict == "stale"
+    assert rv.anchors[0].found is True  # the symbol is present; its shape drifted
+
+
+def test_py_overloaded_symbol_with_fingerprint_is_unverifiable(tmp_repo: Path, make_record):
+    repo = str(tmp_repo)
+    (tmp_repo / "pkg/over.py").write_text(
+        "def dup(a):\n    return a\n\n\ndef dup(a, b):\n    return (a, b)\n",
+        encoding="utf-8",
+    )
+    # Capture refuses to mint for an ambiguous symbol.
+    assert fingerprint_anchor(repo, Anchor("pkg/over.py", "dup")) is None
+    # A fingerprint supplied anyway compares as unverifiable, never stale.
+    token = "msv-fp/1:func(req=1,max=1,star=0,kw=0,kwo=0,gen=0,dec=,base=0)"
+    rec = make_record("fp3", ("pkg/over.py", "dup", token))
+    assert verify_record(repo, rec).verdict == "unverifiable"
+
+
+def test_fingerprint_version_mismatch_dominates_signature_changed(tmp_repo: Path, make_record):
+    repo = str(tmp_repo)
+    fp = fingerprint_anchor(repo, Anchor("pkg/parser.py", "parse"))
+    (tmp_repo / "pkg/parser.py").write_text(
+        "def parse(a, b):\n    return (a, b)\n", encoding="utf-8"
+    )
+    future = "msv-fp/9:func(req=0,max=0,star=0,kw=0,kwo=0,gen=0,dec=,base=0)"
+    rec = make_record(
+        "fp4",
+        ("pkg/parser.py", "parse", fp),       # signature_changed (stale-signal)
+        ("pkg/auth.py", "refresh", future),   # version mismatch (unverifiable)
+    )
+    assert verify_record(repo, rec).verdict == "unverifiable"
 
 
 # --- JS/TS verdicts -----------------------------------------------------------

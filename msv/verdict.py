@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from msv.resolution import resolve_anchor
 from msv.types import (
+    REASON_FINGERPRINT_VERSION_MISMATCH,
     REASON_PARSE_ERROR,
     REASON_PATH_OUTSIDE_REPO,
+    REASON_SIGNATURE_CHANGED,
     REASON_SYMBOL_INDIRECT,
     REASON_UNSUPPORTED_LANGUAGE,
     AnchorResult,
@@ -26,11 +28,18 @@ _UNVERIFIABLE_PREFIXES = (
     REASON_PARSE_ERROR,
     REASON_UNSUPPORTED_LANGUAGE,
     REASON_SYMBOL_INDIRECT,
+    REASON_FINGERPRINT_VERSION_MISMATCH,
 )
 
 
 def _anchor_makes_unverifiable(result: AnchorResult) -> bool:
     return result.reason.startswith(_UNVERIFIABLE_PREFIXES)
+
+
+def _anchor_makes_stale(result: AnchorResult) -> bool:
+    # A resolved-but-drifted symbol (signature_changed) is found=True yet stale;
+    # everything else stale is an outright missing file/symbol (found=False).
+    return (not result.found) or result.reason.startswith(REASON_SIGNATURE_CHANGED)
 
 
 def verify_record(repo_root: str, record: Record) -> RecordVerdict:
@@ -61,6 +70,6 @@ def _classify(results: tuple[AnchorResult, ...]) -> Verdict:
         return "unverifiable"
     if any(_anchor_makes_unverifiable(r) for r in results):
         return "unverifiable"
-    if any(not r.found for r in results):
+    if any(_anchor_makes_stale(r) for r in results):
         return "stale"
     return "current"

@@ -113,6 +113,79 @@ def test_python_symbol_none_on_broken_file_is_parse_error():
     assert locate("def f(:\n", "a.py", None).status == "parse_error"
 
 
+# --- Python Layer B: interface extraction on a found symbol -------------------
+
+
+def test_py_interface_function_arity():
+    iface = locate("def f(a, b, c=1):\n    return 1\n", "a.py", "f").interface
+    assert iface is not None
+    assert iface.category == "func"
+    assert iface.req_positional == 2
+    assert iface.max_positional == 3
+    assert iface.has_star is False
+    assert iface.has_kw is False
+
+
+def test_py_interface_star_and_kwargs():
+    iface = locate("def f(a, *args, **kw):\n    return 1\n", "a.py", "f").interface
+    assert iface.req_positional == 1
+    assert iface.max_positional == 1
+    assert iface.has_star is True
+    assert iface.has_kw is True
+
+
+def test_py_interface_keyword_only_required():
+    iface = locate("def f(a, *, b, c=1):\n    return 1\n", "a.py", "f").interface
+    assert iface.req_kwonly == 1  # b required, c has a default
+
+
+def test_py_interface_async_category():
+    iface = locate("async def f():\n    return 1\n", "a.py", "f").interface
+    assert iface.category == "async_func"
+
+
+def test_py_interface_generator_flag():
+    iface = locate("def g():\n    yield 1\n", "a.py", "g").interface
+    assert iface.is_generator is True
+
+
+def test_py_interface_generator_ignores_nested_yield():
+    # A yield inside a nested function does not make the outer a generator.
+    src = "def g():\n    def inner():\n        yield 1\n    return inner\n"
+    iface = locate(src, "a.py", "g").interface
+    assert iface.is_generator is False
+
+
+def test_py_interface_class_base_count():
+    iface = locate("class C(A, B):\n    pass\n", "a.py", "C").interface
+    assert iface.category == "class"
+    assert iface.base_count == 2
+
+
+def test_py_interface_method_decorators():
+    src = (
+        "class C:\n"
+        "    @staticmethod\n"
+        "    def s():\n        return 1\n"
+        "    @property\n"
+        "    def p(self):\n        return 1\n"
+    )
+    assert locate(src, "a.py", "C.s").interface.contract_decorators == frozenset({"staticmethod"})
+    assert locate(src, "a.py", "C.p").interface.contract_decorators == frozenset({"property"})
+
+
+def test_py_overloaded_symbol_interface_is_none_but_found():
+    # Two top-level defs with the same name: exists, but shape is ambiguous.
+    src = "def dup(a):\n    return a\n\n\ndef dup(a, b):\n    return (a, b)\n"
+    res = locate(src, "a.py", "dup")
+    assert res.status == "found"
+    assert res.interface is None
+
+
+def test_py_interface_none_when_no_symbol_requested():
+    assert locate("x = 1\n", "a.py", None).interface is None
+
+
 # --- TypeScript: the recognized declaration forms ----------------------------
 
 

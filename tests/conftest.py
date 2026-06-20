@@ -169,7 +169,7 @@ def snapshot_tree(root: Path) -> dict[str, tuple[float, int]]:
 def make_record():
     """Return a builder: make_record(id, *anchor_pairs, claim_text=..., commit=...).
 
-    Each anchor_pair is (path,) or (path, symbol).
+    Each anchor_pair is (path,), (path, symbol), or (path, symbol, fingerprint).
     """
 
     def _build(
@@ -179,7 +179,11 @@ def make_record():
         commit: str | None = None,
     ) -> Record:
         anchors = tuple(
-            Anchor(path=pair[0], symbol=(pair[1] if len(pair) > 1 else None))
+            Anchor(
+                path=pair[0],
+                symbol=(pair[1] if len(pair) > 1 else None),
+                fingerprint=(pair[2] if len(pair) > 2 else None),
+            )
             for pair in anchor_pairs
         )
         return Record(

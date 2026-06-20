@@ -9,14 +9,16 @@ from __future__ import annotations
 
 import os
 
-from msv import symbols
+from msv import fingerprint, symbols
 from msv.symbols import SymbolLookup
 from msv.types import (
     REASON_FILE_MISSING,
+    REASON_FINGERPRINT_VERSION_MISMATCH,
     REASON_NO_SYMBOL_REQUESTED,
     REASON_OK,
     REASON_PARSE_ERROR,
     REASON_PATH_OUTSIDE_REPO,
+    REASON_SIGNATURE_CHANGED,
     REASON_SYMBOL_INDIRECT,
     REASON_SYMBOL_MISSING,
     REASON_UNSUPPORTED_LANGUAGE,
@@ -126,10 +128,82 @@ def _to_anchor_result(anchor: Anchor, lookup: SymbolLookup) -> AnchorResult:
             location=f"{anchor.path}:1",
             reason=REASON_NO_SYMBOL_REQUESTED,
         )
+    location = f"{anchor.path}:{lookup.lineno}"
+    if anchor.fingerprint is None:
+        return AnchorResult(
+            path=anchor.path,
+            symbol=anchor.symbol,
+            found=True,
+            location=location,
+            reason=REASON_OK,
+        )
+    return _compare_fingerprint(anchor, lookup, location)
+
+
+def _compare_fingerprint(anchor: Anchor, lookup: SymbolLookup, location: str) -> AnchorResult:
+    """Layer B: classify a found symbol against its recorded fingerprint.
+
+    `found` stays True and `location` stays populated in every branch — the
+    symbol exists; only its call shape is in question. Drift is the lone stale
+    trigger; ambiguity or an unreadable version is unverifiable, never stale.
+    """
+    if lookup.interface is None:
+        # Overloaded / ambiguous shape: no single interface to compare against.
+        return AnchorResult(
+            path=anchor.path,
+            symbol=anchor.symbol,
+            found=True,
+            location=location,
+            reason=f"{REASON_FINGERPRINT_VERSION_MISMATCH}: ambiguous_overload",
+        )
+    result = fingerprint.matches(anchor.fingerprint, lookup.interface)
+    if result == "mismatch":
+        current = fingerprint.render(lookup.interface)
+        return AnchorResult(
+            path=anchor.path,
+            symbol=anchor.symbol,
+            found=True,
+            location=location,
+            reason=f"{REASON_SIGNATURE_CHANGED}: {anchor.fingerprint} -> {current}",
+        )
+    if result == "incomparable":
+        return AnchorResult(
+            path=anchor.path,
+            symbol=anchor.symbol,
+            found=True,
+            location=location,
+            reason=REASON_FINGERPRINT_VERSION_MISMATCH,
+        )
     return AnchorResult(
         path=anchor.path,
         symbol=anchor.symbol,
         found=True,
-        location=f"{anchor.path}:{lookup.lineno}",
+        location=location,
         reason=REASON_OK,
     )
+
+
+def fingerprint_anchor(repo_root: str, anchor: Anchor) -> str | None:
+    """Capture seam: mint the interface fingerprint for an anchor, read-only.
+
+    Returns the opaque token iff the anchor resolves to a single callable in the
+    current working tree; returns None when there is no symbol, the symbol is not
+    a single resolvable callable (absent, indirect, or overloaded), or the file
+    is missing, unparseable, unsupported, or outside the repo. Total — never
+    raises. The consumer MUST call this synchronously at capture, against the
+    same working tree the agent saw, for the 0-false-stale guarantee to hold.
+    """
+    if anchor.symbol is None:
+        return None
+    abs_path = _within_repo(repo_root, anchor.path)
+    if abs_path is None or not os.path.isfile(abs_path):
+        return None
+    try:
+        with open(abs_path, "r", encoding="utf-8") as handle:
+            source = handle.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+    lookup = symbols.locate(source, anchor.path, anchor.symbol)
+    if lookup.status == "found" and lookup.interface is not None:
+        return fingerprint.render(lookup.interface)
+    return None

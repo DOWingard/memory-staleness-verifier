@@ -26,6 +26,8 @@ import tree_sitter_javascript as _ts_javascript
 import tree_sitter_typescript as _ts_typescript
 from tree_sitter import Language, Node, Parser
 
+from msv.fingerprint import Interface
+
 LookupStatus = Literal["found", "missing", "indirect", "parse_error", "unsupported"]
 
 
@@ -35,6 +37,9 @@ class SymbolLookup:
     lineno: int | None = None  # 1-based; 1 for a file-presence (symbol=None) hit
     # mechanism for "indirect", parser message for "parse_error"
     detail: str | None = None
+    # call-shape descriptor; populated iff status == "found" and a single
+    # callable was requested. None for an overloaded/ambiguous symbol.
+    interface: Interface | None = None
 
 
 # Internal language ids. Extension -> id; the id selects the parser backend and
@@ -130,9 +135,9 @@ def _locate_python(source: str, path: str, symbol: str | None) -> SymbolLookup:
 
 def _locate_python_name(tree: ast.Module, symbol: str) -> SymbolLookup:
     """Resolve a bare name to a top-level callable, else split missing/indirect."""
-    for node in tree.body:
-        if isinstance(node, _PY_DEF_NODES) and node.name == symbol:
-            return SymbolLookup(status="found", lineno=node.lineno)
+    matches = [n for n in tree.body if isinstance(n, _PY_DEF_NODES) and n.name == symbol]
+    if matches:
+        return _python_found(matches)
     detail = _python_indirect_detail(tree, symbol)
     if detail is not None:
         return SymbolLookup(status="indirect", detail=detail)
@@ -144,9 +149,9 @@ def _locate_python_method(tree: ast.Module, symbol: str) -> SymbolLookup:
     class_name, _, member = symbol.partition(".")
     for node in tree.body:
         if isinstance(node, ast.ClassDef) and node.name == class_name:
-            for child in node.body:
-                if isinstance(child, _PY_DEF_NODES) and child.name == member:
-                    return SymbolLookup(status="found", lineno=child.lineno)
+            members = [c for c in node.body if isinstance(c, _PY_DEF_NODES) and c.name == member]
+            if members:
+                return _python_found(members)
             # The class is here but the method is not. With a base class the
             # method may be inherited, so its absence is not provable.
             if node.bases:
@@ -156,6 +161,80 @@ def _locate_python_method(tree: ast.Module, symbol: str) -> SymbolLookup:
     if detail is not None:
         return SymbolLookup(status="indirect", detail=detail)
     return SymbolLookup(status="missing")
+
+
+def _python_found(matches: list[ast.stmt]) -> SymbolLookup:
+    """Build a found result; an interface only when a single definition matched.
+
+    More than one definition of the same name (typing overloads, redefinition)
+    is an ambiguous shape: it exists, but no single interface can be compared, so
+    interface is left None and Layer B routes to unverifiable.
+    """
+    interface = _python_interface(matches[0]) if len(matches) == 1 else None
+    return SymbolLookup(status="found", lineno=matches[0].lineno, interface=interface)
+
+
+def _python_interface(node: ast.stmt) -> Interface:
+    if isinstance(node, ast.ClassDef):
+        return Interface(
+            category="class",
+            is_generator=False,
+            req_positional=0,
+            max_positional=0,
+            has_star=False,
+            has_kw=False,
+            req_kwonly=0,
+            contract_decorators=_python_contract_decorators(node),
+            base_count=len(node.bases),
+        )
+    args = node.args  # FunctionDef / AsyncFunctionDef
+    positional = list(args.posonlyargs) + list(args.args)
+    return Interface(
+        category="async_func" if isinstance(node, ast.AsyncFunctionDef) else "func",
+        is_generator=_python_is_generator(node),
+        req_positional=len(positional) - len(args.defaults),
+        max_positional=len(positional),
+        has_star=args.vararg is not None,
+        has_kw=args.kwarg is not None,
+        req_kwonly=sum(1 for default in args.kw_defaults if default is None),
+        contract_decorators=_python_contract_decorators(node),
+        base_count=0,
+    )
+
+
+_PY_CONTRACT_DECORATORS = frozenset({"property", "staticmethod", "classmethod"})
+
+
+def _python_contract_decorators(node: ast.stmt) -> frozenset[str]:
+    names = {
+        name
+        for dec in node.decorator_list
+        if (name := _python_decorator_name(dec)) in _PY_CONTRACT_DECORATORS
+    }
+    return frozenset(names)
+
+
+def _python_decorator_name(dec: ast.expr) -> str | None:
+    if isinstance(dec, ast.Name):
+        return dec.id
+    if isinstance(dec, ast.Attribute):
+        return dec.attr
+    if isinstance(dec, ast.Call):
+        return _python_decorator_name(dec.func)
+    return None
+
+
+def _python_is_generator(node: ast.stmt) -> bool:
+    """True iff the function's OWN body yields (nested scopes do not count)."""
+    return any(_node_has_yield(stmt) for stmt in node.body)
+
+
+def _node_has_yield(node: ast.AST) -> bool:
+    if isinstance(node, (ast.Yield, ast.YieldFrom)):
+        return True
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        return False  # a nested scope's yields belong to it, not to us
+    return any(_node_has_yield(child) for child in ast.iter_child_nodes(node))
 
 
 def _python_indirect_detail(tree: ast.Module, name: str) -> str | None:
