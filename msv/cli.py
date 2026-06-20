@@ -29,8 +29,8 @@ _EXIT_USAGE = 2
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="msv",
-        description="Verify the currency of code-anchored memory records "
-        "against a local Python repo (AST parse only).",
+        description="Verify the currency of code-anchored memory records against "
+        "a local Python, JavaScript, or TypeScript repo (parse-only, no execution).",
     )
     parser.add_argument(
         "--records",
@@ -40,7 +40,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--repo",
         required=True,
-        help="Path to the local Python repository to verify against.",
+        help="Path to the local repository to verify against "
+        "(Python, JavaScript, or TypeScript).",
     )
     parser.add_argument(
         "--out",

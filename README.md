@@ -1,7 +1,8 @@
 # memory-staleness-verifier (`msv`)
 
 A store-agnostic Python library and CLI that re-checks whether code-anchored
-agent-memory entries are still current against a live Python repository.
+agent-memory entries are still current against a live code repository — anchors
+into Python, JavaScript, and TypeScript (including JSX/TSX and `.d.ts`).
 
 ## What it's for
 
@@ -18,14 +19,15 @@ while its correctness silently decays.
 mechanically classifies each record as `current`, `stale`, or `unverifiable`
 with machine-readable evidence, so a consumer can demote or queue correction of
 the entries that no longer hold. Each record's anchors (a file path plus an
-optional symbol) are resolved by **AST parse only** — the target repo's code is
-never imported or executed, so the tool is safe to run against untrusted
-repositories.
+optional symbol) are resolved by **parsing only** — Python via the standard-
+library AST, JavaScript and TypeScript via tree-sitter grammars. The target
+repo's code is never imported or executed, so the tool is safe to run against
+untrusted repositories.
 
 ## Install
 
-Python 3.11+, standard library only (no runtime dependencies). From the project
-root:
+Python 3.11+. Runtime dependencies: `tree-sitter` plus the JavaScript and
+TypeScript grammar packages, installed automatically. From the project root:
 
 ```
 pip install -e .
@@ -49,6 +51,11 @@ records = [
         claim_text="parse takes three args",
         anchors=(Anchor(path="pkg/parser.py", symbol="parse"),),
     ),
+    Record(
+        id="m2",
+        claim_text="Button is the primary CTA component",
+        anchors=(Anchor(path="src/Button.tsx", symbol="Button"),),
+    ),
 ]
 verdicts, summary = verify_records("/path/to/repo", records)
 
@@ -63,9 +70,35 @@ print(summary.current, summary.stale, summary.unverifiable)
   the symbol resolves).
 - `stale` — at least one anchor's file or symbol is missing.
 - `unverifiable` — the record has no anchors, an anchor path is outside the repo,
-  or a file cannot be parsed.
+  a file cannot be parsed, or the file's language is unsupported.
 
 Precedence (one source of truth): `unverifiable` > `stale` > `current`.
+
+## Supported languages
+
+The anchor's file extension selects the parser. A bare `symbol` resolves to a
+named, top-level definition; a dotted `Class.method` resolves to a method in
+that top-level class body (one level deep).
+
+| Language   | Extensions                         | Resolvable symbols |
+|------------|------------------------------------|--------------------|
+| Python     | `.py`                              | `def` / `async def` / `class`; `Class.method` |
+| JavaScript | `.js` `.jsx` `.mjs` `.cjs`         | function & class declarations, and `const`/`let`/`var` bound to a function or arrow; `Class.method` |
+| TypeScript | `.ts` `.tsx` `.mts` `.cts` `.d.ts` | the JavaScript forms, plus `abstract class` and `.d.ts` ambient `declare`d functions/classes |
+
+`export` and `export default` are transparent — `export function f` resolves as
+`f`. Type-only and value-only declarations are intentionally **not** resolvable
+symbols, so an anchor to one is reported missing: TypeScript `interface`, `type`,
+and `enum`, and non-function constants such as `const MAX = 5`. A file whose
+extension is not in the table is reported `unsupported_language` (an
+`unverifiable` verdict).
+
+For JavaScript/TypeScript a syntax error in one part of a file does not hide
+cleanly-parsed declarations elsewhere; a name that cannot be cleanly located in a
+file that fails to parse is reported `unverifiable`, never missing, so a syntax
+error never reads as a deletion. Resolution is structural, not semantic: it
+confirms a declaration with that name still exists, and does not follow
+re-exports, path aliases, or barrel files.
 
 ## API / Reference
 
@@ -95,9 +128,10 @@ Resolve every anchor of one record in input order and classify it.
 resolve_anchor(repo_root: str, anchor: Anchor) -> AnchorResult
 ```
 The single-anchor resolver. A total function — it never raises on an expected
-condition (missing file, parse error, path outside the repo); each becomes an
-`AnchorResult`. `found` is `True` iff the anchor path is inside `repo_root`, the
-file exists, parses, and (if a symbol is given) the symbol resolves.
+condition (missing file, parse error, path outside the repo, unsupported
+language); each becomes an `AnchorResult`. `found` is `True` iff the anchor path
+is inside `repo_root`, the file exists, parses, and (if a symbol is given) the
+symbol resolves in that file's language.
 
 ### Data types
 
@@ -107,9 +141,10 @@ All data types are frozen dataclasses; `Verdict` is the literal
 ```python
 Anchor(path: str, symbol: str | None = None)
 ```
-`path` is repo-relative. `symbol` is a module-level function/class name, or a
-dotted `"Class.method"` resolved one level deep into the top-level class body
-(nested defs are out of scope).
+`path` is repo-relative; its extension selects the language. `symbol` is a
+top-level function/class name, or a dotted `"Class.method"` resolved one level
+deep into the top-level class body (nested defs are out of scope). See
+[Supported languages](#supported-languages) for the per-language symbol forms.
 
 ```python
 Record(id: str, claim_text: str,
@@ -125,7 +160,8 @@ AnchorResult(path: str, symbol: str | None, found: bool,
 `location` is e.g. `"pkg/auth.py:42"` when found, else `None`. `reason` is a
 machine-stable code, optionally with detail — one of: `ok`,
 `no_symbol_requested`, `file_missing`, `symbol_missing`, `path_outside_repo`,
-`parse_error` (the last four carry a `: <detail>` suffix).
+`parse_error`, `unsupported_language` (the last five carry a `: <detail>`
+suffix).
 
 ```python
 RecordVerdict(id: str, verdict: Verdict, anchors: tuple[AnchorResult, ...])
@@ -140,7 +176,8 @@ msv --records records.json --repo /path/to/repo [--out verdicts.json] \
 ```
 
 - `--records` (required) is a JSON file path, or `-` to read from stdin.
-- `--repo` (required) is the local Python repository to verify against.
+- `--repo` (required) is the local repository to verify against (its files may be
+  Python, JavaScript, or TypeScript).
 - `--out` is where the verdicts JSON is written (default: stdout).
 - `--require-env NAME` (repeatable) is checked fail-fast before any work.
 
@@ -200,9 +237,10 @@ never a silent default. On the CLI this exits `2`; the helper raises
 ## Behavior & guarantees
 
 - **Never imports or executes target-repo code.** Files are read read-only and
-  parsed with `ast.parse`; nothing in the target repo is imported or run, so a
-  module that calls `sys.exit(1)` at top level (or has any other import-time side
-  effect) cannot affect a run. Safe against untrusted repositories.
+  parsed statically — Python with `ast.parse`, JavaScript/TypeScript with
+  tree-sitter; nothing in the target repo is imported or run, so a module with an
+  import-time side effect (e.g. a top-level `sys.exit(1)`) cannot affect a run.
+  Safe against untrusted repositories.
 - **Read-only.** No target-repo file is modified and repo mtimes are unchanged.
 - **No network. Deterministic** for a given record set and repo state.
 - **Verdict precedence** is a single source of truth: `unverifiable` > `stale` >
