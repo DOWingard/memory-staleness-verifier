@@ -29,8 +29,9 @@ _EXIT_USAGE = 2
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="msv",
-        description="Verify the currency of code-anchored memory records against "
-        "a local Python, JavaScript, or TypeScript repo (parse-only, no execution).",
+        description="Verify the currency of code-anchored memory records against a "
+        "local Python, JavaScript, or TypeScript repo, or declared database schemas "
+        "(.sql / *.schema.json) — parse-only, no execution, no database connection.",
     )
     parser.add_argument(
         "--records",
@@ -40,8 +41,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--repo",
         required=True,
-        help="Path to the local repository to verify against "
-        "(Python, JavaScript, or TypeScript).",
+        help="Path to the local repository to verify against (Python, JavaScript, "
+        "TypeScript, or declared-schema .sql / *.schema.json sources).",
     )
     parser.add_argument(
         "--out",

@@ -2,7 +2,8 @@
 
 A store-agnostic Python library and CLI that re-checks whether code-anchored
 agent-memory entries are still current against a live code repository — anchors
-into Python, JavaScript, and TypeScript (including JSX/TSX and `.d.ts`).
+into Python, JavaScript, and TypeScript (including JSX/TSX and `.d.ts`), and into
+declared database schemas (SQL DDL and JSON-Schema / Mongo `$jsonSchema`).
 
 ## What it's for
 
@@ -20,14 +21,16 @@ mechanically classifies each record as `current`, `stale`, or `unverifiable`
 with machine-readable evidence, so a consumer can demote or queue correction of
 the entries that no longer hold. Each record's anchors (a file path plus an
 optional symbol) are resolved by **parsing only** — Python via the standard-
-library AST, JavaScript and TypeScript via tree-sitter grammars. The target
-repo's code is never imported or executed, so the tool is safe to run against
-untrusted repositories.
+library AST, JavaScript and TypeScript via tree-sitter grammars, SQL DDL via
+`sqlglot`, and `*.schema.json` via the standard-library JSON parser. The target
+repo's code is never imported or executed, and no database is ever contacted, so
+the tool is safe to run against untrusted repositories.
 
 ## Install
 
 Python 3.11+. Runtime dependencies: `tree-sitter` plus the JavaScript and
-TypeScript grammar packages, installed automatically. From the project root:
+TypeScript grammar packages, and `sqlglot` for SQL DDL parsing, installed
+automatically. From the project root:
 
 ```
 pip install -e .
@@ -208,6 +211,58 @@ verdicts, summary = verify_records("/path/to/repo", [
 A fingerprint is honored only alongside a `symbol`; an anchor with a fingerprint
 but no symbol is inert. The token is opaque — treat it as a blob, never parse it.
 
+## Database schemas
+
+A memory often anchors to a **database schema object** rather than to code — "the
+`users` table has an `email` column", "the `orders` collection stores a `total`
+field". When that schema is declared in a repo artifact, `msv` verifies the anchor
+the same way it verifies code: the artifact is **parsed as data**. No database is
+ever connected, no credential is read, and a `.sql` file containing `DROP DATABASE`
+or `COPY … FROM PROGRAM` is parsed into an AST and discarded, never run — so schema
+verification keeps every safety guarantee the code path has.
+
+The anchor's file suffix selects the schema parser, and the existing dotted grammar
+carries over unchanged: a bare `T` asks whether the **container** (table / view /
+collection) exists; a dotted `T.C` asks whether the **member** (column / field)
+exists.
+
+| Source | Selected by | Parser | Container | Member |
+|--------|-------------|--------|-----------|--------|
+| SQL DDL | `*.sql` | `sqlglot` (Postgres dialect) | `CREATE TABLE` → table, `CREATE VIEW` → view | `CREATE` columns, folded through `ALTER ADD`/`DROP`/`RENAME COLUMN` and `DROP TABLE` |
+| JSON-Schema / Mongo `$jsonSchema` | `*.schema.json` | standard-library `json` | one object schema → a single collection; a `{name: schema}` map → one collection per key; a `$jsonSchema` wrapper is unwrapped | `properties` keys |
+
+A bare `.json` file is **not** read as a schema (it stays `unsupported_language`);
+only the explicit `*.schema.json` suffix routes to the JSON-Schema parser.
+
+Schema staleness reuses the same reason codes and the same zero-false-`stale`
+discipline as code. A container or member is `symbol_missing` (verdict `stale`)
+**only** when it is absent from a **closed, fully-parsed, non-open** declared
+schema — every form of openness instead reports `symbol_indirect`
+(`unverifiable`), never `stale`:
+
+- an **open document schema** — `additionalProperties` left at its JSON-Schema
+  default of `true`, so undeclared fields are permitted (`open_schema`);
+- a **`SELECT *` view** or a **`CREATE TABLE … AS SELECT`**, whose columns come
+  from a query this version does not resolve (`open_schema`);
+- a **`LIKE`-cloned table**, which copies columns from another table (`open_schema`);
+- a table that **`INHERITS`** or is a **partition** of a parent, where a member may
+  come from the parent (`maybe_inherited`);
+- a container touched by an **unmodeled DDL statement** (e.g. a multi-action
+  `ALTER`), whose member set is no longer provably complete (`uncertain_ddl`);
+- a source with even one **unparseable statement**, which is `parse_error` for the
+  whole file — a malformed statement never reads as a deleted object.
+
+The cost of this discipline is recall: a column genuinely deleted from an open
+view or an inheriting table returns `unverifiable` rather than `stale`. A member
+or container that is provably present is `current`.
+
+**Scope (v1).** One consolidated declarative schema artifact per anchor — a
+hand-maintained `schema.sql`, a `pg_dump --schema-only`, or a single document
+`*.schema.json` — verified for **structural existence only** (a table/column or
+collection/field is present or gone). Column *type* / nullability drift, migration-
+directory folding, Prisma / Mongoose / ORM model sources, functions / indexes /
+constraints, and live-database introspection are out of scope here.
+
 ## API / Reference
 
 Import the public surface from the top-level package:
@@ -303,7 +358,8 @@ msv --records records.json --repo /path/to/repo [--out verdicts.json] \
 
 - `--records` (required) is a JSON file path, or `-` to read from stdin.
 - `--repo` (required) is the local repository to verify against (its files may be
-  Python, JavaScript, or TypeScript).
+  Python, JavaScript, or TypeScript, or declared-schema `.sql` / `*.schema.json`
+  sources).
 - `--out` is where the verdicts JSON is written (default: stdout).
 - `--require-env NAME` (repeatable) is checked fail-fast before any work.
 
