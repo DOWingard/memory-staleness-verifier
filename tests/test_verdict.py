@@ -91,3 +91,48 @@ def test_verify_record_preserves_anchor_order(tmp_repo: Path, make_record):
     assert [a.path for a in rv.anchors] == [
         "pkg/parser.py", "pkg/auth.py", "pkg/deleted.py",
     ]
+
+
+# --- JS/TS verdicts -----------------------------------------------------------
+
+
+def test_verify_ts_record_all_found_is_current(tmp_ts_repo: Path, make_record):
+    rec = make_record("t1", ("src/auth.ts", "refresh"), ("src/component.tsx", "Button"))
+    assert verify_record(str(tmp_ts_repo), rec).verdict == "current"
+
+
+def test_verify_ts_missing_symbol_is_stale(tmp_ts_repo: Path, make_record):
+    # An interface is not in the resolvable set: the name is absent -> stale.
+    rec = make_record("t2", ("src/auth.ts", "User"))
+    assert verify_record(str(tmp_ts_repo), rec).verdict == "stale"
+
+
+def test_verify_ts_found_despite_error_is_current(tmp_ts_repo: Path, make_record):
+    rec = make_record("t3", ("src/broken.ts", "good"))
+    assert verify_record(str(tmp_ts_repo), rec).verdict == "current"
+
+
+def test_verify_ts_error_region_symbol_is_unverifiable(tmp_ts_repo: Path, make_record):
+    rec = make_record("t4", ("src/broken.ts", "bad"))
+    assert verify_record(str(tmp_ts_repo), rec).verdict == "unverifiable"
+
+
+def test_verify_unsupported_file_is_unverifiable(tmp_ts_repo: Path, make_record):
+    rec = make_record("t5", ("src/data.json", None))
+    assert verify_record(str(tmp_ts_repo), rec).verdict == "unverifiable"
+
+
+def test_verify_unsupported_dominates_stale(tmp_ts_repo: Path, make_record):
+    # Precedence: an unsupported anchor makes the record unverifiable even
+    # alongside a stale (missing-symbol) anchor.
+    rec = make_record(
+        "t6",
+        ("src/auth.ts", "User"),     # stale-signal (missing)
+        ("src/data.json", None),     # unverifiable-signal (unsupported)
+    )
+    assert verify_record(str(tmp_ts_repo), rec).verdict == "unverifiable"
+
+
+def test_verify_mixed_python_and_ts_record_is_current(tmp_ts_repo: Path, make_record):
+    rec = make_record("t7", ("src/auth.ts", "refresh"), ("src/legacy.py", "old"))
+    assert verify_record(str(tmp_ts_repo), rec).verdict == "current"

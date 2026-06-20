@@ -70,6 +70,90 @@ def tmp_repo(tmp_path: Path) -> Path:
     return root
 
 
+# A JS/TS repo exercising every recognized declaration form, an error-recovery
+# case, a .d.ts ambient file, an unsupported file type, and one Python file (to
+# prove a single record may anchor across languages). Line numbers are asserted
+# by tests, so edits here must keep them in sync.
+_TS_REPO_FILES: dict[str, str] = {
+    "src/auth.ts": (
+        "export function refresh(token: string): string {\n"  # 1
+        "  return token;\n"
+        "}\n"
+        "\n"
+        "export const revoke = async (token: string): Promise<void> => {\n"  # 5
+        "  return;\n"
+        "};\n"
+        "\n"
+        "export class Session {\n"  # 9
+        "  login(user: string): string {\n"  # 10
+        "    return user;\n"
+        "  }\n"
+        "\n"
+        "  async logout(): Promise<void> {}\n"  # 14
+        "}\n"
+        "\n"
+        "export const MAX_AGE = 3600;\n"  # 17  (data const -> excluded)
+        "export interface User {\n"  # 18  (interface -> excluded)
+        "  id: string;\n"
+        "}\n"
+        "export type Id = string;\n"  # 21  (type alias -> excluded)
+        "export enum Role {\n"  # 22  (enum -> excluded)
+        "  Admin,\n"
+        "  Guest,\n"
+        "}\n"
+    ),
+    "src/component.tsx": (
+        "export const Button = (props: { label: string }) => {\n"  # 1
+        "  return <button>{props.label}</button>;\n"
+        "};\n"
+        "\n"
+        "export default function App() {\n"  # 5
+        '  return <Button label="x" />;\n'
+        "}\n"
+    ),
+    "src/util.js": (
+        "function helper() {\n"  # 1
+        "  return 1;\n"
+        "}\n"
+        "const arrow = () => helper();\n"  # 4
+        "class Widget {\n"  # 5
+        "  render() {\n"  # 6
+        "    return null;\n"
+        "  }\n"
+        "}\n"
+    ),
+    "src/broken.ts": (
+        "export function good() {\n"  # 1  (clean, before the error)
+        "  return 1;\n"
+        "}\n"
+        "function bad( {\n"  # 4  deliberate syntax error
+        "export function alsoMaybe() {}\n"
+    ),
+    "types/api.d.ts": (
+        "export declare function fetchUser(id: string): Promise<unknown>;\n"  # 1
+        "declare class Client {\n"  # 2
+        "  send(): void;\n"  # 3
+        "}\n"
+    ),
+    "src/legacy.py": (
+        "def old():\n"  # 1
+        "    return 1\n"
+    ),
+    "src/data.json": '{"k": 1}\n',  # unsupported file type
+}
+
+
+@pytest.fixture
+def tmp_ts_repo(tmp_path: Path) -> Path:
+    """Materialize the JS/TS sample repo under tmp_path; return the repo root."""
+    root = tmp_path / "ts_repo"
+    for rel, text in _TS_REPO_FILES.items():
+        dest = root / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(text, encoding="utf-8")
+    return root
+
+
 def snapshot_tree(root: Path) -> dict[str, tuple[float, int]]:
     """Map every file under root to (mtime_ns, size) for tamper detection."""
     snap: dict[str, tuple[float, int]] = {}

@@ -11,6 +11,7 @@ from msv.resolution import resolve_anchor
 from msv.types import (
     REASON_PARSE_ERROR,
     REASON_PATH_OUTSIDE_REPO,
+    REASON_UNSUPPORTED_LANGUAGE,
     AnchorResult,
     Record,
     RecordVerdict,
@@ -19,7 +20,11 @@ from msv.types import (
 )
 
 # Anchor reason-code prefixes that make the whole record unverifiable.
-_UNVERIFIABLE_PREFIXES = (REASON_PATH_OUTSIDE_REPO, REASON_PARSE_ERROR)
+_UNVERIFIABLE_PREFIXES = (
+    REASON_PATH_OUTSIDE_REPO,
+    REASON_PARSE_ERROR,
+    REASON_UNSUPPORTED_LANGUAGE,
+)
 
 
 def _anchor_makes_unverifiable(result: AnchorResult) -> bool:

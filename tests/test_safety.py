@@ -66,3 +66,19 @@ def test_no_new_files_created_in_repo(tmp_repo: Path):
     resolve_anchor(str(tmp_repo), Anchor("pkg/broken.py", "x"))
     after = set(snapshot_tree(tmp_repo).keys())
     assert after == before  # e.g. no __pycache__ from an accidental import
+
+
+def test_ts_resolution_is_read_only(tmp_ts_repo: Path):
+    # tree-sitter parses source as data; resolving JS/TS must not create,
+    # delete, or modify any file in the target repo.
+    before = snapshot_tree(tmp_ts_repo)
+    for anchor in [
+        Anchor("src/auth.ts", "refresh"),
+        Anchor("src/component.tsx", "Button"),
+        Anchor("src/util.js", "helper"),
+        Anchor("src/broken.ts", "good"),
+        Anchor("types/api.d.ts", "fetchUser"),
+        Anchor("src/data.json", None),
+    ]:
+        resolve_anchor(str(tmp_ts_repo), anchor)
+    assert snapshot_tree(tmp_ts_repo) == before

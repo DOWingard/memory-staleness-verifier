@@ -1,16 +1,16 @@
-"""The one deep module: resolve a single anchor against a repo via AST parse only.
+"""Resolve a single anchor to a location in a repo, safely and read-only.
 
-All filesystem and AST knowledge lives here. Callers never see `ast`, `os`, or
-`pathlib`. The target repo's code is treated strictly as data: a file is read
-read-only and parsed with `ast.parse`; it is never imported or executed, so the
-verifier is safe against untrusted repos and against module-top-level side
-effects such as `sys.exit`.
+This module owns filesystem and path-containment knowledge; all language and
+parsing knowledge lives in `msv.symbols`. A target file is read read-only and
+handed to the symbol seam as text — never imported or executed — so the verifier
+is safe against untrusted repos and against module-top-level side effects.
 """
 from __future__ import annotations
 
-import ast
 import os
 
+from msv import symbols
+from msv.symbols import SymbolLookup
 from msv.types import (
     REASON_FILE_MISSING,
     REASON_NO_SYMBOL_REQUESTED,
@@ -18,12 +18,10 @@ from msv.types import (
     REASON_PARSE_ERROR,
     REASON_PATH_OUTSIDE_REPO,
     REASON_SYMBOL_MISSING,
+    REASON_UNSUPPORTED_LANGUAGE,
     Anchor,
     AnchorResult,
 )
-
-# AST node types that count as a resolvable module-level or class-body symbol.
-_DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
 def _within_repo(repo_root: str, rel_path: str) -> str | None:
@@ -45,36 +43,12 @@ def _within_repo(repo_root: str, rel_path: str) -> str | None:
     return candidate_abs
 
 
-def _module_symbol_location(tree: ast.Module, symbol: str) -> int | None:
-    """Return the 1-based line number of `symbol`, or None if absent.
-
-    A bare name resolves to a function/class declared directly at module top
-    level. A dotted "Class.method" resolves to a def declared directly in the
-    body of that top-level class (one level deep — nested defs are out of scope).
-    """
-    if "." in symbol:
-        class_name, _, member = symbol.partition(".")
-        for node in tree.body:
-            if isinstance(node, ast.ClassDef) and node.name == class_name:
-                for child in node.body:
-                    if isinstance(child, _DEF_NODES) and child.name == member:
-                        return child.lineno
-                return None
-        return None
-
-    for node in tree.body:
-        if isinstance(node, _DEF_NODES) and node.name == symbol:
-            return node.lineno
-    return None
-
-
 def resolve_anchor(repo_root: str, anchor: Anchor) -> AnchorResult:
-    """Resolve one anchor against repo_root using AST parse only.
+    """Resolve one anchor against repo_root, reading the target as data only.
 
     Total function — never raises on expected conditions. Returns an AnchorResult
     whose `found` is True iff the anchor path is inside repo_root, the file exists,
-    parses, and (if a symbol is given) the symbol resolves as a module-level
-    function/class or "Class.method" in that class body.
+    parses, and (if a symbol is given) the symbol resolves in that file's language.
     """
     abs_path = _within_repo(repo_root, anchor.path)
     if abs_path is None:
@@ -98,28 +72,31 @@ def resolve_anchor(repo_root: str, anchor: Anchor) -> AnchorResult:
     with open(abs_path, "r", encoding="utf-8") as handle:
         source = handle.read()
 
-    try:
-        tree = ast.parse(source, filename=abs_path)
-    except SyntaxError as exc:
+    lookup = symbols.locate(source, anchor.path, anchor.symbol)
+    return _to_anchor_result(anchor, lookup)
+
+
+def _to_anchor_result(anchor: Anchor, lookup: SymbolLookup) -> AnchorResult:
+    """Map a structural SymbolLookup onto the reason-coded AnchorResult."""
+    if lookup.status == "unsupported":
         return AnchorResult(
             path=anchor.path,
             symbol=anchor.symbol,
             found=False,
             location=None,
-            reason=f"{REASON_PARSE_ERROR}: {exc.msg}",
+            reason=f"{REASON_UNSUPPORTED_LANGUAGE}: {anchor.path}",
         )
 
-    if anchor.symbol is None:
+    if lookup.status == "parse_error":
         return AnchorResult(
             path=anchor.path,
-            symbol=None,
-            found=True,
-            location=f"{anchor.path}:1",
-            reason=REASON_NO_SYMBOL_REQUESTED,
+            symbol=anchor.symbol,
+            found=False,
+            location=None,
+            reason=f"{REASON_PARSE_ERROR}: {lookup.detail or 'syntax error'}",
         )
 
-    lineno = _module_symbol_location(tree, anchor.symbol)
-    if lineno is None:
+    if lookup.status == "missing":
         return AnchorResult(
             path=anchor.path,
             symbol=anchor.symbol,
@@ -128,10 +105,19 @@ def resolve_anchor(repo_root: str, anchor: Anchor) -> AnchorResult:
             reason=f"{REASON_SYMBOL_MISSING}: {anchor.symbol}",
         )
 
+    # status == "found"
+    if anchor.symbol is None:
+        return AnchorResult(
+            path=anchor.path,
+            symbol=None,
+            found=True,
+            location=f"{anchor.path}:1",
+            reason=REASON_NO_SYMBOL_REQUESTED,
+        )
     return AnchorResult(
         path=anchor.path,
         symbol=anchor.symbol,
         found=True,
-        location=f"{anchor.path}:{lineno}",
+        location=f"{anchor.path}:{lookup.lineno}",
         reason=REASON_OK,
     )
