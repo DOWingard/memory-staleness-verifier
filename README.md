@@ -418,11 +418,13 @@ never a silent default. On the CLI this exits `2`; the helper raises
 
 ## Behavior & guarantees
 
-- **Never imports or executes target-repo code.** Files are read read-only and
-  parsed statically — Python with `ast.parse`, JavaScript/TypeScript with
-  tree-sitter; nothing in the target repo is imported or run, so a module with an
-  import-time side effect (e.g. a top-level `sys.exit(1)`) cannot affect a run.
-  Safe against untrusted repositories.
+- **Never imports or executes target-repo code; never connects to a database.**
+  Files are read read-only and parsed statically — Python with `ast.parse`,
+  JavaScript/TypeScript with tree-sitter, SQL DDL with `sqlglot`, `*.schema.json`
+  with the standard-library JSON parser; nothing in the target repo is imported or
+  run and no database is contacted, so a module with an import-time side effect
+  (e.g. a top-level `sys.exit(1)`) or a `.sql` file containing `COPY … FROM PROGRAM`
+  cannot affect a run. Safe against untrusted repositories.
 - **Read-only.** No target-repo file is modified and repo mtimes are unchanged.
 - **No network. Deterministic** for a given record set and repo state.
 - **Verdict precedence** is a single source of truth: `unverifiable` > `stale` >
