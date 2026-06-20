@@ -1,0 +1,22 @@
+README.md
+  s_887aeea3747f1e::t_3f95a6fde517ae 73-74,79-82
+  s_887aeea3747f1e::t_421b2ebc03627f 249-253
+  s_887aeea3747f1e::t_da6a27290137ff 114-153
+  s_887aeea3747f1e::t_fc195ffad229ea 286-287
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "2a6ae5bb30c421a831a776382caa8c2d2ea6cf98",
+  "prompts": {},
+  "sessions": {
+    "s_887aeea3747f1e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "db71bbe2-6c63-49bc-819d-64435fccdd84",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
