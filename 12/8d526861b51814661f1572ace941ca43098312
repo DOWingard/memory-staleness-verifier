@@ -1,0 +1,19 @@
+README.md
+  s_b259cb4203921c::t_e95fdfd117ae48 421-427
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "128d526861b51814661f1572ace941ca43098312",
+  "prompts": {},
+  "sessions": {
+    "s_b259cb4203921c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e917fc03-8ae8-4d26-a2c3-705385d7b808",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
