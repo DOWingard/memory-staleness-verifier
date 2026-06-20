@@ -1,0 +1,23 @@
+tests/test_fingerprint.py
+  s_06804d5a98d377::t_fa4e04171605a7 1-167
+msv/fingerprint.py
+  s_06804d5a98d377::t_1964d2f45cbae6 1-80,82-92,94-150
+  s_06804d5a98d377::t_fd8f9919ccab80 81
+  s_06804d5a98d377::t_c5459cfebfb604 93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "08c1c576a225495471f081dc9c44e33e69f2a661",
+  "prompts": {},
+  "sessions": {
+    "s_06804d5a98d377": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "18e694ac-432f-462a-9760-fc60ae27587b",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
