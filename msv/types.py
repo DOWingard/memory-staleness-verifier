@@ -23,12 +23,25 @@ REASON_NO_SYMBOL_REQUESTED = "no_symbol_requested"
 REASON_NO_ANCHORS = "no_anchors"
 # Anchor points at a file whose language the resolver cannot parse.
 REASON_UNSUPPORTED_LANGUAGE = "unsupported_language"
+# Symbol name is present in the file but not a resolvable callable (a re-export,
+# wildcard, data binding, nested/conditional def, or maybe-inherited method).
+# Routes to unverifiable: presence msv cannot positively resolve is never stale.
+REASON_SYMBOL_INDIRECT = "symbol_indirect"
+# A recorded interface fingerprint provably broke a previously-valid call shape.
+# The one new stale trigger this increment adds.
+REASON_SIGNATURE_CHANGED = "signature_changed"
+# The recorded fingerprint's version is unreadable (a future format), or the
+# symbol's shape is ambiguous (overloaded). Routes to unverifiable, never stale.
+REASON_FINGERPRINT_VERSION_MISMATCH = "fingerprint_version_mismatch"
 
 
 @dataclass(frozen=True, slots=True)
 class Anchor:
     path: str  # repo-relative path to a Python file
     symbol: str | None = None  # module-level function/class, or "Class.method"
+    # Opaque, msv-minted interface token, honored only alongside a symbol; a
+    # fingerprint with no symbol is inert and never changes a verdict.
+    fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

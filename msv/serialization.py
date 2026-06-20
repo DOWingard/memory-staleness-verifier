@@ -41,7 +41,11 @@ def record_from_dict(d: dict) -> Record:
 def _anchor_from_dict(d: dict) -> Anchor:
     if not isinstance(d, dict) or "path" not in d:
         raise ValueError("anchor is missing required field 'path'")
-    return Anchor(path=d["path"], symbol=d.get("symbol"))
+    return Anchor(
+        path=d["path"],
+        symbol=d.get("symbol"),
+        fingerprint=d.get("fingerprint"),
+    )
 
 
 def records_from_json(text: str) -> list[Record]:

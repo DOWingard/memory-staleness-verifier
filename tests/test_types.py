@@ -7,6 +7,9 @@ import typing
 import pytest
 
 from msv.types import (
+    REASON_FINGERPRINT_VERSION_MISMATCH,
+    REASON_SIGNATURE_CHANGED,
+    REASON_SYMBOL_INDIRECT,
     Anchor,
     AnchorResult,
     Record,
@@ -20,8 +23,24 @@ def test_anchor_construction_and_defaults():
     a = Anchor(path="pkg/auth.py")
     assert a.path == "pkg/auth.py"
     assert a.symbol is None
+    assert a.fingerprint is None
     b = Anchor(path="pkg/auth.py", symbol="refresh")
     assert b.symbol == "refresh"
+
+
+def test_anchor_fingerprint_field():
+    # The opaque capture-side token rides on the anchor; default is None so
+    # every existing call site keeps the same shape.
+    a = Anchor(path="pkg/auth.py", symbol="refresh", fingerprint="msv-fp/1:func(req=1)")
+    assert a.fingerprint == "msv-fp/1:func(req=1)"
+
+
+def test_new_reason_codes_are_pinned():
+    # The closed reason-code set this increment adds; consumers branch on these
+    # exact spellings, so they are contract.
+    assert REASON_SYMBOL_INDIRECT == "symbol_indirect"
+    assert REASON_SIGNATURE_CHANGED == "signature_changed"
+    assert REASON_FINGERPRINT_VERSION_MISMATCH == "fingerprint_version_mismatch"
 
 
 def test_record_construction_and_defaults():

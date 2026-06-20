@@ -79,6 +79,27 @@ def test_record_from_dict_defaults():
     assert rec.recorded_at_commit is None
 
 
+def test_anchor_fingerprint_roundtrips():
+    # The optional opaque token is parsed onto the anchor when present.
+    d = {
+        "id": "m",
+        "claim_text": "c",
+        "anchors": [
+            {"path": "p.py", "symbol": "f", "fingerprint": "msv-fp/1:func(req=2)"},
+        ],
+    }
+    rec = record_from_dict(d)
+    assert rec.anchors[0].fingerprint == "msv-fp/1:func(req=2)"
+
+
+def test_anchor_fingerprint_absent_is_none():
+    # The field is optional on the wire; absence is tolerated, never an error.
+    rec = record_from_dict(
+        {"id": "m", "claim_text": "c", "anchors": [{"path": "p.py", "symbol": "f"}]}
+    )
+    assert rec.anchors[0].fingerprint is None
+
+
 def test_record_from_dict_missing_id_raises():
     with pytest.raises(ValueError, match="id"):
         record_from_dict({"claim_text": "c"})
