@@ -1,0 +1,21 @@
+tests/test_symbols.py
+  s_a98b0f2e5ce54b::t_b091b196f0126b 1-254
+msv/symbols.py
+  s_a98b0f2e5ce54b::t_3f4298183f39ee 1-230
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "ced850d3a6ac21431442efc9b882e10d140feaf0",
+  "prompts": {},
+  "sessions": {
+    "s_a98b0f2e5ce54b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1ed938ae-8694-4326-b2f8-2a96dc3a747f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Derek Wingard <derekwingard@gmail.com>"
+    }
+  }
+}
